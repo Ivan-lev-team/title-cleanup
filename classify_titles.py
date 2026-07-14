@@ -15,72 +15,128 @@ import sys
 
 JOB_TITLE_COL = "Job Title"
 
-# --- Qualifying: specific function/role keywords (checked as whole-word/phrase matches) ---
-QUALIFY_PATTERNS = [
-    r"co-?founder", r"\bfounder\b", r"\bowner\b", r"\bceo\b", r"\bpresident\b",
-    r"managing partner", r"\bproprietor\b", r"\bentrepreneur\b", r"self-?employed",
-    r"managing member", r"e-?commerce", r"\bdtc\b", r"\bd2c\b", r"direct-to-consumer",
-    r"\bgrowth\b", r"\bmarketing\b", r"\bcmo\b", r"\bbrand\b", r"\bdigital\b",
-    r"\baffiliate\b", r"\binfluencer\b", r"partnerships?\b", r"partner marketing",
-    r"performance marketing", r"paid media", r"paid social", r"\bacquisition\b",
-    r"\bcommerce\b", r"online store", r"\bamazon\b", r"\bmarketplace\b",
-    r"\bstrategy\b", r"strategic", r"\brevenue\b", r"\bretention\b", r"\blifecycle\b",
-    r"\bcro\b", r"\bcoo\b", r"chief executive officer", r"chief operating officer",
-    r"general manager", r"business development",
-    r"\bchannel\b", r"\bmedia\b", r"\bshopify\b", r"web store", r"online sales",
-    r"digital commerce", r"multichannel", r"omnichannel", r"\bcreator\b",
-    r"platform manager", r"email marketing", r"sms marketing", r"demand gen",
-    r"customer acquisition", r"social media", r"content marketing", r"content strategy",
-    r"marketing operations", r"product marketing", r"go-to-market", r"\bgtm\b",
-    r"\bwalmart\b", r"chief revenue", r"chief marketing", r"chief growth",
-    r"chief strategy", r"chief commercial", r"\bprincipal\b",
+# Specific function/role keywords that qualify a title on their own.
+SPECIFIC_QUALIFY_PATTERNS = [
+    r"\bMarketplace\s+Coordinator", r"\bInfluencer\s+Partnerships", r"\bMarketplace\s+Operations",
+    r"\bMarketplace\s+Specialist", r"\bSocial\s+Media\s+Marketing", r"\bPerformance\s+Marketing",
+    r"\bSocial\s+Media\s+Director", r"\bInfluencer\s+Marketing", r"\bIntegrated\s+Marketing",
+    r"\bBusiness\s+Development", r"\bEcommerce\s+Operations", r"\bEcommerce\s+Specialist",
+    r"\bCreator\s+Partnerships", r"\bMarketing\s+Operations", r"\bSocial\s+Media\s+Manager",
+    r"\bCustomer\s+Acquisition", r"\bAffiliate\s+Marketing", r"\bEcommerce\s+Marketing",
+    r"\bMarketplace\s+Manager", r"\bMarketplace\s+Analyst", r"\bManaging\s+Principal",
+    r"\bMarketing\s+Director", r"\bFounding\s+Principal", r"\bDigital\s+Storefront",
+    r"\bE\-commerce\s+Manager", r"\bEcommerce\s+Director", r"\bDirect\-to\-Consumer",
+    r"\bChannel\s+Marketing", r"\bDemand\s+Generation", r"\bAffiliate\s+Manager",
+    r"\bMarketing\s+Manager", r"\bAmazon\s+Specialist", r"\bContent\s+Marketing",
+    r"\bEcommerce\s+Manager", r"\bCreator\s+Marketing", r"\bProduct\s+Marketing",
+    r"\bPartner\s+Marketing", r"\bContent\s+Strategy", r"\bManaging\s+Partner",
+    r"\bGrowth\s+Marketing", r"\bPlatform\s+Manager", r"\bOnline\s+Marketing",
+    r"\bDigital\s+Commerce", r"\bPerformance\s+Lead", r"\bBrand\s+Marketing",
+    r"\bGeneral\s+Manager", r"\bManaging\s+Member", r"\bSocial\s+Commerce",
+    r"\bChannel\s+Manager", r"\bE\-commerce\s+Lead", r"\bRetention\s+Lead",
+    r"\bDTC\s+Operations", r"\bEcommerce\s+Lead", r"\bAmazon\s+Manager",
+    r"\bLifecycle\s+Lead", r"\bMarketing\s+Lead", r"\bAffiliate\s+Lead",
+    r"\bBrand\s+Director", r"\bGrowth\s+Manager", r"\bMulti\-Channel",
+    r"\bDigital\s+Sales", r"\bDTC\s+Marketing", r"\bAmazon\s+Seller",
+    r"\bBrand\s+Manager", r"\bWeb\s+Marketing", r"\bSMS\s+Marketing",
+    r"\bSelf\s+Employed", r"\bOnline\s+Sales", r"\bRevenue\s+Lead",
+    r"\bOmni\-Channel", r"\bMultichannel", r"\bGo\-to\-Market",
+    r"\bPartnerships", r"\bOnline\s+Store", r"\bShopify\s+Plus",
+    r"\bDigital\s+Lead", r"\bEntrepreneur", r"\bOmnichannel",
+    r"\bAcquisition", r"\bDTC\s+Manager", r"\bMarketplace",
+    r"\bPartnership", r"\bPaid\s+Social", r"\bGrowth\s+Lead",
+    r"\bCo\-Founder", r"\bInfluencer", r"\bBrand\s+Lead",
+    r"\bConversion", r"\bE\-Commerce", r"\bPaid\s+Media",
+    r"\bProprietor", r"\bDemand\s+Gen", r"\bRetention",
+    r"\beCommerce", r"\bAffiliate", r"\bWeb\s+Store",
+    r"\bEcommerce", r"\bMarketing", r"\bPrincipal",
+    r"\bPresident", r"\bLifecycle", r"\bCommerce",
+    r"\bWebstore", r"\bShopping", r"\bStrategy",
+    r"\bDigital", r"\bShopify", r"\bCreator",
+    r"\bFounder", r"\bRevenue", r"\bWalmart",
+    r"\bChannel", r"\bGrowth", r"\bAmazon",
+    r"\bE\-com", r"\bOwner", r"\bMedia",
+    r"\bBrand", r"\beCom", r"\bEcom",
+    r"\bCOO", r"\bCEO", r"\bCRO",
+    r"\bGTM", r"\bD2C", r"\bDTC",
+    r"\bCMO",
+    # Spelled-out C-suite forms not literally in the include list but implied
+    # by their abbreviations (CEO, COO, CRO, CMO) being present.
+    r"\bChief\s+Executive\s+Officer", r"\bChief\s+Operating\s+Officer",
+    r"\bChief\s+Revenue\s+Officer", r"\bChief\s+Marketing\s+Officer",
 ]
 
-# --- Disqualifying: specific function keywords (checked as whole-word/phrase matches) ---
+# Seniority words that mean nothing on their own (per judgment rule 1) --
+# only used to detect that a title has *some* leadership seniority, never
+# used to win a tie-break against a specific disqualifying function.
+GENERIC_SENIORITY_PATTERNS = [
+    r"\bSenior\s+Manager", r"\bVice\s+President", r"\bDirector", r"\bChief", r"\bHead", r"\bVP",
+]
+
 DISQUALIFY_PATTERNS = [
-    r"\bfinance\b", r"financial", r"\baccounting\b", r"\bcontroller\b", r"\bcfo\b",
-    r"\btax\b", r"\bpayroll\b", r"\baudit", r"\btreasury\b",
-    r"information technology", r"\bit\b", r"\bsoftware\b", r"\bengineer", r"\bdeveloper\b",
-    r"devops", r"\bsystems?\b", r"\bnetwork\b", r"\bsecurity\b", r"cybersecurity",
-    r"human resources", r"\bhr\b", r"\brecruiter\b", r"recruiting", r"\btalent\b",
-    r"\blegal\b", r"\bcounsel\b", r"\bcompliance\b", r"\blogistics\b", r"supply chain",
-    r"\bwarehouse\b", r"fulfillment", r"procurement", r"purchasing",
-    r"customer service", r"customer support", r"call center", r"\bwholesale\b",
-    r"retail sales", r"field sales", r"inside sales", r"store manager",
-    r"sales associate", r"\bstylist\b", r"\bcashier\b", r"\bdesigner\b", r"\bgraphic\b",
-    r"photographer", r"videographer", r"copywriter", r"\beditor", r"\bux\b", r"\bui\b",
-    r"manufacturing", r"\bproduction\b", r"r&d", r"research and development",
-    r"\bquality\b", r"executive assistant", r"administrative assistant",
-    r"\breceptionist\b", r"\bintern\b", r"\btrainee\b", r"apprentice",
-    r"brand ambassador", r"\bambassador\b", r"assistant manager", r"\binvestor\b",
-    r"board director", r"board member", r"sustainability", r"government relations",
-    r"\bcoach\b", r"school principal", r"assistant principal", r"vice principal",
-    r"philanthropy", r"advancement", r"major gift", r"donor relations", r"\bdonor\b",
-    r"fundrais", r"\bmembership\b", r"\badmissions\b", r"visitor services",
-    r"community outreach", r"housekeeping", r"catering", r"culinary", r"\bchef\b",
-    r"hospitality", r"food and beverage", r"\bticketing\b", r"corporate communications",
-    r"internal communications", r"public relations", r"\bpublicity\b",
-    r"\badministration\b", r"\bfacilities\b", r"\bmaintenance\b", r"\btraining\b",
-    r"client services", r"client success", r"client relations", r"technical support",
-    r"project management", r"program management", r"\bresearch\b", r"construction",
-    r"distribution", r"collections", r"technology officer", r"technical officer",
-    r"chief technology", r"chief information", r"chief science", r"chief data",
-    r"diversity", r"\bequity\b", r"\binclusion\b", r"chief impact officer",
-    r"\bimpact officer\b", r"tour guide", r"\bzoning\b", r"\bplumber\b",
-    r"\belectrician\b",
+    r"\bInstitutional\s+Advancement", r"\bCorporate\s+Communications", r"\bResearch\s+and\s+Development",
+    r"\bIndependent\s+Distributor", r"\bInternal\s+Communications", r"\bDirector\s+of\s+Operations",
+    r"\bInformation\s+Technology", r"\bDigital\s+Transformation", r"\bBusiness\s+Intelligence",
+    r"\bSocial\s+Media\s+Warrior", r"\bGovernment\s+Relations", r"\bCommunity\s+Engagement",
+    r"\bExecutive\s+Assistant", r"\bAssistant\s+Principal", r"\bCommunity\s+Outreach",
+    r"\bProject\s+Management", r"\bCustomer\s+Relations", r"\bProgram\s+Management",
+    r"\bTechnical\s+Support", r"\bFood\s+and\s+Beverage", r"\bIndividual\s+Giving",
+    r"\bNational\s+Accounts", r"\bAssistant\s+Manager", r"\bVisitor\s+Services",
+    r"\bSpecial\s+Projects", r"\bBrand\s+Ambassador", r"\bPublic\s+Relations",
+    r"\bCustomer\s+Service", r"\bExternal\s+Affairs", r"\bCustomer\s+Support",
+    r"\bCustomer\s+Success", r"\bSchool\s+Principal", r"\bClient\s+Relations",
+    r"\bSales\s+Associate", r"\bHuman\s+Resources", r"\bClient\s+Services",
+    r"\bProduct\s+Manager", r"\bDonor\s+Relations", r"\bClient\s+Success",
+    r"\bEmployer\s+Brand", r"\bContent\s+Writer", r"\bImplementation",
+    r"\bOffice\s+Manager", r"\bBoard\s+Director", r"\bVice\s+Principal",
+    r"\bAdministration", r"\bAdministrative", r"\bSustainability",
+    r"\bManufacturing", r"\bStore\s+Manager", r"\bHousekeeping",
+    r"\bPhotographer", r"\bReceptionist", r"\bDistribution",
+    r"\bSupply\s+Chain", r"\bTicket\s+Sales", r"\bRetail\s+Sales",
+    r"\bKey\s+Accounts", r"\bBoard\s+Member", r"\bConstruction",
+    r"\bVideographer", r"\bPhilanthropy", r"\bInside\s+Sales",
+    r"\bCollections", r"\bFulfillment", r"\bMajor\s+Gifts",
+    r"\bProgramming", r"\bEngineering", r"\bHospitality",
+    r"\bField\s+Sales", r"\bMaintenance", r"\bAdvancement",
+    r"\bCall\s+Center", r"\bProcurement", r"\bApprentice",
+    r"\bPurchasing", r"\bMembership", r"\bAmbassador",
+    r"\bController", r"\bAccounting", r"\bFormulator",
+    r"\bCopywriter", r"\bRecruiting", r"\bFacilities",
+    r"\bBookkeeper", r"\bAccountant", r"\bAdmissions",
+    r"\bCompliance", r"\bProduction", r"\bInventory",
+    r"\bLogistics", r"\bDeveloper", r"\bWarehouse",
+    r"\bPublicity", r"\bRecruiter", r"\bTicketing",
+    r"\bParalegal", r"\bWholesale", r"\bPrograms",
+    r"\bResearch", r"\bTreasury", r"\bEngineer",
+    r"\bCatering", r"\bAttorney", r"\bSecurity",
+    r"\bTraining", r"\bCulinary", r"\bSoftware",
+    r"\bDesigner", r"\bInvestor", r"\bStylist",
+    r"\bTrainee", r"\bCashier", r"\bNetwork",
+    r"\bFinance", r"\bPayroll", r"\bQuality",
+    r"\bGraphic", r"\bSystems", r"\bCounsel",
+    r"\bDevOps", r"\bPeople", r"\bIntern",
+    r"\bTalent", r"\bCoffee", r"\bEditor",
+    r"\bLegal", r"\bCoach", r"\bAudit",
+    r"\bFP\&A", r"\bChef", r"\bTax",
+    r"\bCFO", r"\bR\&D", r"\bA\&R",
+    r"\bQA", r"\bUI", r"\bIT",
+    r"\bHR", r"\bUX",
+    # Spelled-out C-suite forms not literally in the exclude list but implied
+    # by their abbreviations (CFO, IT, HR) being present.
+    r"\bChief\s+Financial\s+Officer", r"\bChief\s+Technology\s+Officer",
+    r"\bChief\s+Information\s+Officer", r"\bChief\s+Human\s+Resources\s+Officer",
+    r"\bChief\s+People\s+Officer", r"\bChief\s+Talent\s+Officer",
+    r"\bChief\s+Legal\s+Officer", r"\bChief\s+Compliance\s+Officer",
+    r"\bChief\s+Security\s+Officer",
 ]
 
-BLUE_COLLAR_OPERATOR = re.compile(
-    r"\b(machine|forklift|cnc|press|plant)\s+operator\b", re.IGNORECASE
-)
-
-QUALIFY_RE = re.compile("|".join(QUALIFY_PATTERNS), re.IGNORECASE)
+SPECIFIC_QUALIFY_RE = re.compile("|".join(SPECIFIC_QUALIFY_PATTERNS), re.IGNORECASE)
+GENERIC_SENIORITY_RE = re.compile("|".join(GENERIC_SENIORITY_PATTERNS), re.IGNORECASE)
 DISQUALIFY_RE = re.compile("|".join(DISQUALIFY_PATTERNS), re.IGNORECASE)
-BUSINESS_DEV_RE = re.compile(r"business development", re.IGNORECASE)
-MARKETING_COMMS_RE = re.compile(r"marketing communications?", re.IGNORECASE)
-SCHOOL_PRINCIPAL_RE = re.compile(
-    r"(school|middle school|high school|assistant principal|vice principal)", re.IGNORECASE
-)
+
+
+def spans_overlap(a, b):
+    return a.start() < b.end() and b.start() < a.end()
 
 
 def classify(title):
@@ -89,31 +145,31 @@ def classify(title):
 
     t = title.strip()
 
-    if BLUE_COLLAR_OPERATOR.search(t):
-        return "FAIL", "Blue-collar operator role"
-
-    if "principal" in t.lower() and SCHOOL_PRINCIPAL_RE.search(t):
-        return "FAIL", "School principal, education context"
-
-    # Marketing Communications overrides the Communications-family disqualifiers
-    if MARKETING_COMMS_RE.search(t):
-        return "PASS", "Marketing Communications, marketing function"
-
-    qualify_match = QUALIFY_RE.search(t)
+    specific_match = SPECIFIC_QUALIFY_RE.search(t)
     disqualify_match = DISQUALIFY_RE.search(t)
+    generic_match = GENERIC_SENIORITY_RE.search(t)
 
-    if disqualify_match and not qualify_match:
+    if disqualify_match:
+        # A specific qualifying function only wins the tie if it appears
+        # earlier than (and doesn't overlap) the disqualifying phrase --
+        # otherwise the disqualifying phrase is treated as the primary
+        # function (this also covers cases like "Director of Operations"
+        # or "Digital Transformation" where a qualifying word is either a
+        # generic seniority word or textually swallowed by the exclude
+        # phrase).
+        if (
+            specific_match
+            and specific_match.start() < disqualify_match.start()
+            and not spans_overlap(specific_match, disqualify_match)
+        ):
+            return "PASS", f"'{specific_match.group(0)}' qualifying function (primary)"
         return "FAIL", f"'{disqualify_match.group(0)}' disqualifying function"
 
-    if disqualify_match and qualify_match:
-        # Primary-function tie-break: whichever keyword appears first in the
-        # title wins, since that's usually the lead/primary role descriptor.
-        if qualify_match.start() <= disqualify_match.start():
-            return "PASS", f"'{qualify_match.group(0)}' qualifying function (primary)"
-        return "FAIL", f"'{disqualify_match.group(0)}' disqualifying function (primary)"
+    if specific_match:
+        return "PASS", f"'{specific_match.group(0)}' qualifying function"
 
-    if qualify_match:
-        return "PASS", f"'{qualify_match.group(0)}' qualifying function"
+    if generic_match:
+        return "PASS", f"'{generic_match.group(0)}' seniority, no disqualifying function"
 
     return "PASS", "Ambiguous title, default pass per rule 7"
 
