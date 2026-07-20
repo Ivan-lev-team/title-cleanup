@@ -128,7 +128,12 @@ def main():
                 hubspot_match = True
 
             # de-dupe within this file itself
-            dedup_key = li or (nm, domain)
+            if li:
+                dedup_key = ("li", li)
+            elif nm and domain:
+                dedup_key = ("nd", nm, domain)
+            else:
+                dedup_key = None
             is_dup = dedup_key in seen_dedup_keys if dedup_key else False
             if dedup_key:
                 seen_dedup_keys.add(dedup_key)
