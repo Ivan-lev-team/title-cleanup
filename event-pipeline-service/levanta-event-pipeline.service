@@ -1,0 +1,15 @@
+[Unit]
+Description=Levanta event import pipeline (qualify -> dedupe -> enrich -> round-robin -> push)
+After=network.target
+
+[Service]
+Type=simple
+User=levanta
+WorkingDirectory=/opt/levanta-event-pipeline
+EnvironmentFile=/opt/levanta-event-pipeline/.env
+ExecStart=/opt/levanta-event-pipeline/venv/bin/python3 main.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
