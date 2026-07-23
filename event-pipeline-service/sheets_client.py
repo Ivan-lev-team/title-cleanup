@@ -77,3 +77,29 @@ def write_result(worksheet, row_number, header, results):
             continue
         col_idx = header.index(col_name) + 1
         worksheet.update_cell(row_number, col_idx, value)
+
+
+def get_company_import_by_domain():
+    """Reads the whole Company Import tab once per poll cycle and returns
+    {domain_lower: row_dict}, so pipeline.py can enrich a brand-new company
+    with the richer fields that only live on that tab (Industry, Company
+    Type, Employees, Revenue, LinkedIn Company Page, Company Owner,
+    Amazon Storefront URL, ...) instead of just name+domain from the
+    Contact Import row. Company Domain is the required dedupe/association
+    key on that tab, exactly as the template's instructions say."""
+    sh = _gc.open_by_key(config.GOOGLE_SHEET_ID)
+    ws = sh.worksheet(config.COMPANY_SHEET_NAME)
+    all_values = ws.get_all_values()
+    if not all_values:
+        return {}
+
+    header = all_values[0]
+    by_domain = {}
+    for row in all_values[1:]:
+        row = row + [""] * (len(header) - len(row))
+        row_dict = dict(zip(header, row))
+        domain = row_dict.get("Company Domain", "").strip().lower()
+        if not domain:
+            continue  # required field on this tab -- skip anything without it, per template
+        by_domain[domain] = row_dict
+    return by_domain

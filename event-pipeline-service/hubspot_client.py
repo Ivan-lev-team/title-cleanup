@@ -1,19 +1,23 @@
 """
-All HubSpot API interaction: dedupe lookups, live round-robin balancing,
-and create/update/associate. Uses the real REST API directly (not the
-10-per-batch tool cap we hit in Claude Code), since this runs as its own
-service with normal network access.
+All HubSpot API interaction. Core request/batch functions (chunked,
+request_with_retry, batch_update, batch_associate_default, normalize_phone)
+are carried over unchanged from push_event_to_hubspot.py -- the script that
+was actually dry-run validated against live HubSpot data on the Social
+Commerce Summit 2026 NYC list (225 rows, 98 companies created, 21 updated,
+193 contacts created, 32 updated, 222 associations, zero errors).
 
-Two hardening lessons carried over from the manual Social Commerce Summit
-2026 push:
-  1. HubSpot's `domain IN [...]` search filter can occasionally over-match
-     (one bad value in a batch matching thousands of companies), which then
-     hits HubSpot's 10,000-result search pagination cap and 400s. Guard:
-     small batches (25) + a sanity check that falls back to per-domain EQ
-     lookups if a batch's result count looks implausible.
-  2. Round-robin state should never live in fragile local counters that can
-     desync across restarts/concurrent runs -- pod/owner assignment is
-     decided live off HubSpot's current company counts per pod each time.
+Two things layered on top of that proven logic for this service:
+  1. Per-row processing uses single exact-match (EQ) lookups, not bulk IN
+     batches -- since rows arrive one at a time off the Sheet poll, there's
+     no need for IN-batching at all, which sidesteps the domain-IN
+     over-matching bug entirely (found live during the CLI hardening
+     session: one bad value in a 84-domain IN batch matched 10,000+
+     companies and blew past HubSpot's search pagination cap). The bulk
+     helpers below keep that same fix (small batches + a sanity-check
+     fallback to per-domain EQ) for any future bulk-reconciliation job that
+     processes many rows in one sweep.
+  2. Round-robin is live-balanced off current HubSpot company counts per
+     Pod, not a fixed cycle position -- no local state to lose or desync.
 """
 import time
 import requests
@@ -24,15 +28,16 @@ HEADERS = {"Authorization": f"Bearer {config.HUBSPOT_TOKEN}", "Content-Type": "a
 BASE = config.HUBSPOT_BASE
 
 DOMAIN_BATCH_SIZE = 25
-OVERMATCH_RATIO = 4  # if a batch returns more than N x batch size, treat as suspicious
+OVERMATCH_RATIO = 4  # a batch returning more than N x its own size is untrustworthy
 
 
-def _chunked(lst, n):
+def chunked(lst, n=100):
     for i in range(0, len(lst), n):
         yield lst[i:i + n]
 
 
-def _request(method, url, **kwargs):
+def request_with_retry(method, url, **kwargs):
+    resp = None
     for attempt in range(6):
         resp = requests.request(method, url, headers=HEADERS, timeout=30, **kwargs)
         if resp.status_code == 429:
@@ -43,65 +48,72 @@ def _request(method, url, **kwargs):
     return resp
 
 
-def _search(object_type, filter_groups, properties, limit=100):
-    """Single search call, no pagination -- callers that need pagination
-    handle it themselves so they can apply the over-match guard per page."""
-    body = {"filterGroups": filter_groups, "properties": properties, "limit": limit}
-    resp = _request("POST", f"{BASE}/crm/v3/objects/{object_type}/search", json=body)
-    if resp.status_code >= 300:
-        raise RuntimeError(f"{object_type} search failed: {resp.status_code} {resp.text[:300]}")
-    return resp.json()
+def normalize_phone(p):
+    p = (p or "").strip()
+    if not p:
+        return None
+    return p if p.startswith("+") else "+" + p
 
+
+# ---------------------------------------------------------------- lookups --
 
 def find_contact_by_email(email):
     if not email:
         return None
-    data = _search(
-        "contacts",
-        [{"filters": [{"propertyName": "email", "operator": "EQ", "value": email}]}],
-        ["email", "jobtitle", "phone", "hs_linkedin_url", "hs_lead_status"],
-        limit=1,
-    )
-    results = data.get("results", [])
+    body = {
+        "filterGroups": [{"filters": [{"propertyName": "email", "operator": "EQ", "value": email}]}],
+        "properties": ["email", "jobtitle", "phone", "hs_linkedin_url", "hs_lead_status"],
+        "limit": 1,
+    }
+    resp = request_with_retry("POST", f"{BASE}/crm/v3/objects/contacts/search", json=body)
+    if resp.status_code >= 300:
+        raise RuntimeError(f"contact search failed: {resp.status_code} {resp.text[:300]}")
+    results = resp.json().get("results", [])
     return results[0] if results else None
 
 
 def find_company_by_domain(domain):
-    """Single-domain exact lookup -- the safe, always-correct path. Used
-    directly for one-row-at-a-time processing (this service processes rows
-    as they appear in the sheet, not in giant batches), so the over-match
-    bug from bulk IN-filter batches doesn't apply here at all -- kept the
-    batch/guard helper below anyway for any future bulk-reconciliation use."""
     if not domain:
         return None
-    data = _search(
-        "companies",
-        [{"filters": [{"propertyName": "domain", "operator": "EQ", "value": domain}]}],
-        ["name", "domain", "pod", "sdr_owner"],
-        limit=1,
-    )
-    results = data.get("results", [])
+    body = {
+        "filterGroups": [{"filters": [{"propertyName": "domain", "operator": "EQ", "value": domain}]}],
+        "properties": ["name", "domain", "pod", "sdr_owner"],
+        "limit": 1,
+    }
+    resp = request_with_retry("POST", f"{BASE}/crm/v3/objects/companies/search", json=body)
+    if resp.status_code >= 300:
+        raise RuntimeError(f"company search failed: {resp.status_code} {resp.text[:300]}")
+    results = resp.json().get("results", [])
     return results[0] if results else None
 
 
-def find_companies_by_domains_bulk(domains):
-    """Batch lookup for bulk reconciliation jobs. Returns {domain: record}.
-    Guards against the IN-over-match bug: any batch whose result count looks
-    implausible relative to its input size falls back to per-domain EQ."""
-    found = {}
-    for batch in _chunked(sorted(set(d for d in domains if d)), DOMAIN_BATCH_SIZE):
-        try:
-            data = _search(
-                "companies",
-                [{"filters": [{"propertyName": "domain", "operator": "IN", "values": batch}]}],
-                ["name", "domain", "pod", "sdr_owner"],
-                limit=100,
-            )
-        except RuntimeError:
-            data = {"results": [], "total": 10**9}  # force fallback below
+def find_owner_id_by_email(email):
+    """The template's 'Contact Owner' / 'Company Owner' columns are HubSpot
+    user emails, not numeric IDs -- resolve here before setting hubspot_owner_id."""
+    if not email:
+        return None
+    resp = request_with_retry("GET", f"{BASE}/crm/v3/owners", params={"email": email})
+    if resp.status_code >= 300:
+        return None
+    results = resp.json().get("results", [])
+    return results[0]["id"] if results else None
 
-        suspicious = data.get("total", 0) > len(batch) * OVERMATCH_RATIO
-        if suspicious:
+
+def find_companies_by_domains_bulk(domains):
+    """Batch lookup for bulk reconciliation jobs (not used in normal one-row
+    polling). Returns {domain: record}. Same over-match guard validated
+    during the manual Social Commerce Summit push."""
+    found = {}
+    for batch in chunked(sorted(set(d for d in domains if d)), DOMAIN_BATCH_SIZE):
+        body = {
+            "filterGroups": [{"filters": [{"propertyName": "domain", "operator": "IN", "values": batch}]}],
+            "properties": ["name", "domain", "pod", "sdr_owner"],
+            "limit": 100,
+        }
+        resp = request_with_retry("POST", f"{BASE}/crm/v3/objects/companies/search", json=body)
+        data = resp.json() if resp.status_code < 300 else {"results": [], "total": 10**9}
+
+        if data.get("total", 0) > len(batch) * OVERMATCH_RATIO:
             for d in batch:
                 rec = find_company_by_domain(d)
                 if rec:
@@ -115,51 +127,46 @@ def find_companies_by_domains_bulk(domains):
     return found
 
 
+# --------------------------------------------------------- round robin ----
+
 def least_loaded_pod():
     """Live round-robin: count existing companies per pod right now, pick
-    whichever has the fewest. Self-balancing -- no state to lose, no drift
-    across restarts or concurrent runs. Pod RevOps is never a candidate."""
+    whichever has the fewest. Pod RevOps is never a candidate."""
     counts = {}
     for pod in config.POD_OWNERS:
-        data = _search(
-            "companies",
-            [{"filters": [{"propertyName": "pod", "operator": "EQ", "value": pod}]}],
-            [],
-            limit=1,  # we only need the "total" count, not the records
-        )
-        counts[pod] = data.get("total", 0)
+        body = {
+            "filterGroups": [{"filters": [{"propertyName": "pod", "operator": "EQ", "value": pod}]}],
+            "properties": [],
+            "limit": 1,
+        }
+        resp = request_with_retry("POST", f"{BASE}/crm/v3/objects/companies/search", json=body)
+        counts[pod] = resp.json().get("total", 0) if resp.status_code < 300 else 0
     return min(counts, key=counts.get)
 
 
 def least_loaded_owner_in_pod(pod):
-    """Within the chosen pod, balance between its 1-2 owners the same way --
-    live counts, not a local alternating counter."""
     owners = config.POD_OWNERS[pod]
     if len(owners) == 1:
         return owners[0]
     counts = {}
     for owner in owners:
-        data = _search(
-            "companies",
-            [{"filters": [
+        body = {
+            "filterGroups": [{"filters": [
                 {"propertyName": "pod", "operator": "EQ", "value": pod},
                 {"propertyName": "sdr_owner", "operator": "EQ", "value": owner},
             ]}],
-            [],
-            limit=1,
-        )
-        counts[owner] = data.get("total", 0)
+            "properties": [],
+            "limit": 1,
+        }
+        resp = request_with_retry("POST", f"{BASE}/crm/v3/objects/companies/search", json=body)
+        counts[owner] = resp.json().get("total", 0) if resp.status_code < 300 else 0
     return min(counts, key=counts.get)
 
 
-def create_company(name, domain, pod, owner):
-    props = {"name": name}
-    if domain:
-        props["domain"] = domain
-    if pod:
-        props["pod"] = pod
-        props["sdr_owner"] = owner
-    resp = _request("POST", f"{BASE}/crm/v3/objects/companies", json={"properties": props})
+# --------------------------------------------------------- create/update --
+
+def create_company(properties):
+    resp = request_with_retry("POST", f"{BASE}/crm/v3/objects/companies", json={"properties": properties})
     if resp.status_code >= 300:
         raise RuntimeError(f"company create failed: {resp.status_code} {resp.text[:500]}")
     return resp.json()["id"]
@@ -168,7 +175,7 @@ def create_company(name, domain, pod, owner):
 def update_company(company_id, properties):
     if not properties:
         return
-    resp = _request(
+    resp = request_with_retry(
         "PATCH", f"{BASE}/crm/v3/objects/companies/{company_id}", json={"properties": properties}
     )
     if resp.status_code >= 300:
@@ -176,7 +183,7 @@ def update_company(company_id, properties):
 
 
 def create_contact(properties):
-    resp = _request("POST", f"{BASE}/crm/v3/objects/contacts", json={"properties": properties})
+    resp = request_with_retry("POST", f"{BASE}/crm/v3/objects/contacts", json={"properties": properties})
     if resp.status_code >= 300:
         raise RuntimeError(f"contact create failed: {resp.status_code} {resp.text[:500]}")
     return resp.json()["id"]
@@ -185,17 +192,41 @@ def create_contact(properties):
 def update_contact(contact_id, properties):
     if not properties:
         return
-    resp = _request(
+    resp = request_with_retry(
         "PATCH", f"{BASE}/crm/v3/objects/contacts/{contact_id}", json={"properties": properties}
     )
     if resp.status_code >= 300:
         raise RuntimeError(f"contact update failed: {resp.status_code} {resp.text[:500]}")
 
 
+def batch_update(object_type, inputs):
+    """Carried over from push_event_to_hubspot.py for any future bulk job."""
+    for batch in chunked(inputs, 100):
+        resp = request_with_retry(
+            "POST", f"{BASE}/crm/v3/objects/{object_type}/batch/update", json={"inputs": batch}
+        )
+        if resp.status_code >= 300:
+            raise RuntimeError(f"{object_type} batch update failed: {resp.status_code} {resp.text[:500]}")
+
+
 def associate_contact_to_company(contact_id, company_id):
-    resp = _request(
-        "PUT",
-        f"{BASE}/crm/v3/objects/contacts/{contact_id}/associations/default/companies/{company_id}",
+    """Uses the same v4 default-association batch endpoint validated in the
+    manual push (batch of 1 here since this service processes one row at a
+    time, but it's the identical, proven call)."""
+    body = {"inputs": [{"from": {"id": str(contact_id)}, "to": {"id": str(company_id)}}]}
+    resp = request_with_retry(
+        "POST", f"{BASE}/crm/v4/associations/contacts/companies/batch/create/default", json=body
     )
     if resp.status_code >= 300:
         raise RuntimeError(f"association failed: {resp.status_code} {resp.text[:500]}")
+
+
+def batch_associate_default(from_type, to_type, pairs):
+    """Bulk version, carried over from push_event_to_hubspot.py."""
+    for batch in chunked(pairs, 100):
+        body = {"inputs": [{"from": {"id": str(a)}, "to": {"id": str(b)}} for a, b in batch]}
+        resp = request_with_retry(
+            "POST", f"{BASE}/crm/v4/associations/{from_type}/{to_type}/batch/create/default", json=body
+        )
+        if resp.status_code >= 300:
+            raise RuntimeError(f"batch association failed: {resp.status_code} {resp.text[:500]}")

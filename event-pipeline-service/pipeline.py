@@ -10,17 +10,53 @@ import hubspot_client
 import prospeo_client
 import config
 
+normalize_phone = hubspot_client.normalize_phone
 
-def normalize_phone(p):
-    p = (p or "").strip()
-    if not p:
-        return None
-    return p if p.startswith("+") else "+" + p
+# Company Import tab -> HubSpot company property. "Company Owner" is handled
+# separately (needs email->ID resolution), not a straight copy.
+COMPANY_FIELD_MAP = {
+    "Website URL": "website",
+    "Industry": "industry",
+    "Company Type": "type",
+    "Number of Employees": "numberofemployees",
+    "Annual Revenue": "annualrevenue",
+    "City": "city",
+    "State/Region": "state",
+    "Country/Region": "country",
+    "LinkedIn Company Page": "linkedin_company_page",
+    "Amazon Storefront URL": "amazon_storefront_url",
+}
 
 
-def process_row(row):
+def _build_company_create_props(company_name, domain, company_import_row):
+    """Merges the bare name+domain we always have from the Contact Import
+    row with the richer fields from the Company Import tab, when that
+    company's domain is present there (Company Domain is that tab's
+    required dedupe key, so this is a direct dict lookup, not a search)."""
+    props = {"name": company_name}
+    if domain:
+        props["domain"] = domain
+    if not company_import_row:
+        return props
+    for template_col, hs_prop in COMPANY_FIELD_MAP.items():
+        value = company_import_row.get(template_col, "").strip()
+        if value:
+            props[hs_prop] = value
+    owner_email = company_import_row.get("Company Owner", "").strip()
+    if owner_email:
+        owner_id = hubspot_client.find_owner_id_by_email(owner_email)
+        if owner_id:
+            props["hubspot_owner_id"] = owner_id
+    return props
+
+
+def process_row(row, company_import_by_domain=None):
     """row: dict from the Contact Import sheet tab (template column names).
+    company_import_by_domain: {domain: row_dict} from the Company Import
+    tab (see sheets_client.get_company_import_by_domain), used to enrich a
+    brand-new company beyond the bare name+domain the contact row gives us.
     Returns a dict of result columns to write back to the sheet."""
+    company_import_by_domain = company_import_by_domain or {}
     first_name = row.get("First Name", "").strip()
     last_name = row.get("Last Name", "").strip()
     email = row.get("Email", "").strip().lower()
@@ -72,7 +108,15 @@ def process_row(row):
     elif company_name:
         pod = hubspot_client.least_loaded_pod()
         owner = hubspot_client.least_loaded_owner_in_pod(pod)
-        company_id = hubspot_client.create_company(company_name, domain, pod, owner)
+        company_import_row = company_import_by_domain.get(domain)
+        props = _build_company_create_props(company_name, domain, company_import_row)
+        props["pod"] = pod
+        # Company Import's own Company Owner (if present) takes priority over
+        # the round-robin SDR owner for hubspot_owner_id -- but sdr_owner
+        # (the pod-tracking property) always reflects the round-robin result.
+        props["sdr_owner"] = owner
+        props.setdefault("hubspot_owner_id", owner)
+        company_id = hubspot_client.create_company(props)
     else:
         owner = None
 
