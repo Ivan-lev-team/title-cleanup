@@ -44,6 +44,12 @@ def request_with_retry(method, url, **kwargs):
             wait = int(resp.headers.get("Retry-After", "2"))
             time.sleep(wait)
             continue
+        # HubSpot's search API intermittently throws spurious 400/5xx; these
+        # are safe to retry on read-only calls and must not be treated as final.
+        if resp.status_code == 400 or resp.status_code >= 500:
+            wait = 2 ** attempt
+            time.sleep(wait)
+            continue
         return resp
     return resp
 
@@ -215,7 +221,7 @@ def associate_contact_to_company(contact_id, company_id):
     time, but it's the identical, proven call)."""
     body = {"inputs": [{"from": {"id": str(contact_id)}, "to": {"id": str(company_id)}}]}
     resp = request_with_retry(
-        "POST", f"{BASE}/crm/v4/associations/contacts/companies/batch/create/default", json=body
+        "POST", f"{BASE}/crm/v4/associations/contacts/companies/batch/associate/default", json=body
     )
     if resp.status_code >= 300:
         raise RuntimeError(f"association failed: {resp.status_code} {resp.text[:500]}")
@@ -226,7 +232,7 @@ def batch_associate_default(from_type, to_type, pairs):
     for batch in chunked(pairs, 100):
         body = {"inputs": [{"from": {"id": str(a)}, "to": {"id": str(b)}} for a, b in batch]}
         resp = request_with_retry(
-            "POST", f"{BASE}/crm/v4/associations/{from_type}/{to_type}/batch/create/default", json=body
+            "POST", f"{BASE}/crm/v4/associations/{from_type}/{to_type}/batch/associate/default", json=body
         )
         if resp.status_code >= 300:
             raise RuntimeError(f"batch association failed: {resp.status_code} {resp.text[:500]}")

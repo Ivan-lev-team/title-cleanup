@@ -3,37 +3,77 @@ Step 3 of the pipeline: enrichment, only called for rows that already
 survived qualify (step 1) and dedupe (step 2) -- never spend credits on a
 row that would be filtered out anyway.
 
-Only fills in a missing EMAIL right now (that's the concrete gap we hit on
-the Social Commerce Summit list -- 91 name-only rows with no email and no
-LinkedIn). If Prospeo's hit-rate turns out too low for a given list, this is
-the seam where a second provider could be added later.
+Schema matches the validated /hubspot-push/enrich_prospeo.py exactly
+(endpoint, payload shape, verified-vs-unverified handling): bulk-enrich-person,
+identifier keyed to a caller-supplied string, only_verified_email=False so we
+can see unverified hits too but gate on status before ever using one, and
+enrich_mobile off since mobiles cost 10 credits vs. 1 for email. The service
+calls this one row at a time (poll cadence, not CSV batch), so it just sends
+a single-item "batch" -- same endpoint and schema, batch size of 1.
 """
 import requests
 
 import config
 
-PROSPEO_URL = "https://api.prospeo.io/email-finder"
+PROSPEO_URL = "https://api.prospeo.io/bulk-enrich-person"
 
 
-def find_email(first_name, last_name, domain):
-    """Returns (email, confidence) or (None, None) if not found or no key set."""
-    if not config.PROSPEO_API_KEY or not domain:
-        return None, None
+def _build_item(full_name, linkedin_url, email, company_name, domain):
+    item = {"identifier": "0"}
+    if full_name:
+        item["full_name"] = full_name
+    if linkedin_url:
+        item["linkedin_url"] = linkedin_url
+    if email:
+        item["email"] = email
+    if company_name:
+        item["company_name"] = company_name
+    if domain:
+        item["company_website"] = domain
+    return item
+
+
+def _has_min_match(item):
+    """Prospeo needs linkedin_url alone, email alone, or name + a company identifier."""
+    if item.get("linkedin_url") or item.get("email"):
+        return True
+    if item.get("full_name") and (item.get("company_name") or item.get("company_website")):
+        return True
+    return False
+
+
+def enrich_person(full_name, company_name, domain, linkedin_url="", email=""):
+    """Returns a dict: {"email": str, "status": str, "linkedin_url": str}
+    (all fields "" if nothing found or no key configured). Only email with
+    status == "VERIFIED" should ever be auto-pushed to HubSpot; anything
+    else belongs in a review-only column."""
+    empty = {"email": "", "status": "", "linkedin_url": ""}
+    if not config.PROSPEO_KEY:
+        return empty
+
+    item = _build_item(full_name, linkedin_url, email, company_name, domain)
+    if not _has_min_match(item):
+        return empty
 
     resp = requests.post(
         PROSPEO_URL,
-        headers={"X-KEY": config.PROSPEO_API_KEY, "Content-Type": "application/json"},
-        json={"first_name": first_name, "last_name": last_name, "company": domain},
-        timeout=30,
+        headers={"X-KEY": config.PROSPEO_KEY, "Content-Type": "application/json"},
+        json={"only_verified_email": False, "enrich_mobile": False, "data": [item]},
+        timeout=90,
     )
     if resp.status_code != 200:
-        return None, None
+        return empty
 
-    data = resp.json()
-    email_info = data.get("response", {}).get("email")
-    if not email_info:
-        return None, None
+    matched = resp.json().get("matched", [])
+    if not matched:
+        return empty
 
-    email = email_info.get("email")
-    verified = email_info.get("verification", {}).get("status") == "VALID"
-    return (email, "verified" if verified else "unverified") if email else (None, None)
+    person = matched[0].get("person") or {}
+    email_obj = person.get("email") or {}
+    found_email = (email_obj.get("email") or "").strip()
+    result = {
+        "email": found_email if email_obj.get("revealed") else "",
+        "status": email_obj.get("status", "") if email_obj.get("revealed") else "",
+        "linkedin_url": (person.get("linkedin_url") or "").strip(),
+    }
+    return result

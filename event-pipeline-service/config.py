@@ -13,7 +13,7 @@ def _require(name):
 
 HUBSPOT_TOKEN = _require("HUBSPOT_TOKEN")
 ANTHROPIC_API_KEY = _require("ANTHROPIC_API_KEY")
-PROSPEO_API_KEY = os.environ.get("PROSPEO_API_KEY", "")  # optional -- enrichment skipped if blank
+PROSPEO_KEY = os.environ.get("PROSPEO_KEY", "")  # optional -- enrichment skipped if blank
 GOOGLE_SERVICE_ACCOUNT_JSON = _require("GOOGLE_SERVICE_ACCOUNT_JSON")
 GOOGLE_SHEET_ID = _require("GOOGLE_SHEET_ID")
 

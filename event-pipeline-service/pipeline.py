@@ -86,13 +86,21 @@ def process_row(row, company_import_by_domain=None):
 
     # ---- STEP 3: enrich, only now that we know this row is worth it ----
     enrichment_note = ""
+    unverified_email = ""
     if not email and not existing_contact:
-        found_email, confidence = prospeo_client.find_email(first_name, last_name, domain)
-        if found_email:
-            email = found_email
-            enrichment_note = f"Email found via Prospeo ({confidence})"
-            # re-check HubSpot now that we have an email we didn't have before
-            existing_contact = hubspot_client.find_contact_by_email(email)
+        full_name = f"{first_name} {last_name}".strip()
+        found = prospeo_client.enrich_person(full_name, company_name, domain, linkedin_url=linkedin)
+        if found.get("linkedin_url") and not linkedin:
+            linkedin = found["linkedin_url"]
+        if found.get("email"):
+            if found["status"] == "VERIFIED":
+                email = found["email"]
+                enrichment_note = "Email found via Prospeo (VERIFIED)"
+                # re-check HubSpot now that we have an email we didn't have before
+                existing_contact = hubspot_client.find_contact_by_email(email)
+            else:
+                unverified_email = found["email"]
+                enrichment_note = f"Prospeo found an UNVERIFIED email ({found['status'] or 'unverified'}) -- not auto-used"
 
     # ---- STEP 4: round robin (only for genuinely new companies without a pod) ----
     company_id = None
@@ -164,11 +172,15 @@ def process_row(row, company_import_by_domain=None):
     if company_id:
         hubspot_client.associate_contact_to_company(contact_id, company_id)
 
+    notes = enrichment_note
+    if unverified_email:
+        notes = f"{notes} | Unverified email for manual review: {unverified_email}".strip(" |")
+
     return {
         "Pipeline Status": "Pushed",
         "ICP Verdict": "PASS",
         "Already in HubSpot?": already_existed,
         "HubSpot Contact ID": contact_id,
         "HubSpot Company ID": company_id or "",
-        "Notes": enrichment_note,
+        "Notes": notes,
     }

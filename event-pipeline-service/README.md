@@ -13,10 +13,13 @@ that would be filtered out anyway.
    `crm.schemas.contacts.read`, `crm.schemas.companies.read`.
 2. **Anthropic API key** — console.anthropic.com. Used for the company-ICP
    judge (one call per new company, not per row).
-3. **Prospeo API key** — used to find missing emails for name-only rows.
-   Optional: if left blank, enrichment is skipped and those rows still get
-   created (name + LinkedIn + phone, whatever's present), just without a
-   found email.
+3. **Prospeo API key** (`PROSPEO_KEY` in `.env`, starts `pk_...`) — used to
+   find missing emails for name-only rows via `/bulk-enrich-person`. Optional:
+   if left blank, enrichment is skipped and those rows still get created
+   (name + LinkedIn + phone, whatever's present), just without a found email.
+   Only Prospeo hits with `status == "VERIFIED"` are auto-written to the
+   contact's email; anything else is left out of the push and noted in the
+   sheet's `Notes` column for manual review, never auto-used.
 4. **Google service account** with a JSON key, and edit access to the sheet
    (share the sheet with the service account's `client_email` address).
 5. A **Google Sheet** with a `Contact Import` tab whose header row matches
@@ -69,13 +72,24 @@ Add one test row to the sheet, watch it get picked up and processed, check
 the sheet gets a `Pipeline Status` value and (if pushed) real HubSpot IDs.
 Ctrl+C to stop, then move to the systemd setup above once it looks right.
 
+## Optional one-off maintenance scripts
+
+These are NOT run by the polling service (`main.py`) — run them by hand when
+needed, from inside `event-pipeline-service/` with the venv active and `.env`
+filled in:
+
+- `scripts/enrich_mobiles.py "Event Name"` — backfills mobile numbers for
+  already-pushed contacts tagged with that event's drill-down value that are
+  still missing a phone. Costs 10 Prospeo credits per number found, which is
+  why it's a separate manual step instead of part of the live per-row
+  pipeline (the live pipeline only spends the 1-credit email lookup).
+- `scripts/create_hubspot_list.py "Event Name" "List Name"` — creates (or
+  reuses) a static HubSpot contact list and adds every contact tagged with
+  that event's drill-down value. Requires the token to also have
+  `crm.lists.read`/`crm.lists.write` scopes.
+
 ## Known things worth double-checking before trusting this at scale
 
-- **Prospeo's exact request/response schema** in `prospeo_client.py` was
-  written from general knowledge of their API, not verified against live
-  docs from this session (no network access here to test it). Check
-  Prospeo's current API reference and adjust the endpoint URL / field names
-  in `prospeo_client.py` if the first real enrichment call errors out.
 - **The Anthropic model name** in `qualify.py` (`claude-sonnet-5`) — confirm
   this matches whatever's current/available on your API plan at deploy time.
 - **HubSpot's `domain IN [...]` over-matching bug** (found during the manual
@@ -88,3 +102,7 @@ Ctrl+C to stop, then move to the systemd setup above once it looks right.
 - **Sheet header must match exactly** — `sheets_client.py` reads columns by
   the template's exact header names. If the sheet's headers drift from the
   template, update the `row.get("...")` calls in `pipeline.py` to match.
+- **Prospeo schema is now the validated, working one** — `prospeo_client.py`,
+  `scripts/enrich_mobiles.py` match the real `/bulk-enrich-person` endpoint
+  and payload/response shape from the local `/hubspot-push` tooling that was
+  actually run against live HubSpot data, not a guess.
