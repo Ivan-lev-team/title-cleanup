@@ -60,7 +60,9 @@ def get_unprocessed_rows(sheet_name):
     unprocessed = []
     for i, row in enumerate(all_values[1:], start=2):  # sheet row 2 = first data row
         row = row + [""] * (len(header) - len(row))  # pad short rows
-        if row[status_idx].strip():
+        # a "DRY RUN" status doesn't count as processed -- rows must still
+        # go through for real once DRY_RUN is turned off
+        if row[status_idx].strip() and not row[status_idx].strip().upper().startswith("DRY RUN"):
             continue  # already processed
         row_dict = dict(zip(header, row))
         # skip genuinely empty rows and the template's example/instruction row

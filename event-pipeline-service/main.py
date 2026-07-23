@@ -33,11 +33,14 @@ def run_once():
             traceback.print_exc()
         else:
             print(f"  Row {row_number} ({name}): {result.get('Pipeline Status')}")
+        if config.DRY_RUN and result.get("Pipeline Status") == "Pushed":
+            result["Pipeline Status"] = "DRY RUN - would push"
         sheets_client.write_result(ws, row_number, header, result)
 
 
 def main():
-    print(f"Levanta event pipeline service starting. Polling every {config.POLL_INTERVAL_SECONDS}s.")
+    mode = "DRY RUN (no HubSpot writes)" if config.DRY_RUN else "LIVE"
+    print(f"Levanta event pipeline service starting in {mode} mode. Polling every {config.POLL_INTERVAL_SECONDS}s.")
     while True:
         try:
             run_once()

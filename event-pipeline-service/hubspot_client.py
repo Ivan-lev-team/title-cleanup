@@ -170,8 +170,27 @@ def least_loaded_owner_in_pod(pod):
 
 
 # --------------------------------------------------------- create/update --
+#
+# Every write below checks config.DRY_RUN first. In dry-run mode, reads/
+# searches (everything above this line) still hit live HubSpot -- only
+# creates/updates/associations are skipped, so a dry run exercises the real
+# qualify -> dedupe -> enrich -> round-robin logic against real data without
+# writing anything.
+
+_dry_run_counter = 0
+
+
+def _dry_run_id(kind):
+    global _dry_run_counter
+    _dry_run_counter += 1
+    return f"DRY-RUN-{kind}-{_dry_run_counter}"
+
 
 def create_company(properties):
+    if config.DRY_RUN:
+        fake_id = _dry_run_id("COMPANY")
+        print(f"  [DRY RUN] would create company {fake_id}: {properties}")
+        return fake_id
     resp = request_with_retry("POST", f"{BASE}/crm/v3/objects/companies", json={"properties": properties})
     if resp.status_code >= 300:
         raise RuntimeError(f"company create failed: {resp.status_code} {resp.text[:500]}")
@@ -181,6 +200,9 @@ def create_company(properties):
 def update_company(company_id, properties):
     if not properties:
         return
+    if config.DRY_RUN:
+        print(f"  [DRY RUN] would update company {company_id}: {properties}")
+        return
     resp = request_with_retry(
         "PATCH", f"{BASE}/crm/v3/objects/companies/{company_id}", json={"properties": properties}
     )
@@ -189,6 +211,10 @@ def update_company(company_id, properties):
 
 
 def create_contact(properties):
+    if config.DRY_RUN:
+        fake_id = _dry_run_id("CONTACT")
+        print(f"  [DRY RUN] would create contact {fake_id}: {properties}")
+        return fake_id
     resp = request_with_retry("POST", f"{BASE}/crm/v3/objects/contacts", json={"properties": properties})
     if resp.status_code >= 300:
         raise RuntimeError(f"contact create failed: {resp.status_code} {resp.text[:500]}")
@@ -197,6 +223,9 @@ def create_contact(properties):
 
 def update_contact(contact_id, properties):
     if not properties:
+        return
+    if config.DRY_RUN:
+        print(f"  [DRY RUN] would update contact {contact_id}: {properties}")
         return
     resp = request_with_retry(
         "PATCH", f"{BASE}/crm/v3/objects/contacts/{contact_id}", json={"properties": properties}
@@ -219,6 +248,9 @@ def associate_contact_to_company(contact_id, company_id):
     """Uses the same v4 default-association batch endpoint validated in the
     manual push (batch of 1 here since this service processes one row at a
     time, but it's the identical, proven call)."""
+    if config.DRY_RUN:
+        print(f"  [DRY RUN] would associate contact {contact_id} <-> company {company_id}")
+        return
     body = {"inputs": [{"from": {"id": str(contact_id)}, "to": {"id": str(company_id)}}]}
     resp = request_with_retry(
         "POST", f"{BASE}/crm/v4/associations/contacts/companies/batch/associate/default", json=body

@@ -63,14 +63,28 @@ journalctl -u levanta-event-pipeline -f   # live logs
 
 ## Quick manual test first (before trusting the systemd service)
 
+Set `DRY_RUN=true` in `.env` first. In this mode, every HubSpot *read* (contact/
+company search, round-robin counts) still runs live against your real portal,
+but every *write* (create/update company or contact, association) is skipped
+and logged as `[DRY RUN] would ...` instead of executed — so you can watch the
+whole qualify -> dedupe -> enrich -> round-robin flow run against real data
+with zero risk of touching production records.
+
 ```bash
 cd /opt/levanta-event-pipeline
 source venv/bin/activate
 python3 main.py
 ```
-Add one test row to the sheet, watch it get picked up and processed, check
-the sheet gets a `Pipeline Status` value and (if pushed) real HubSpot IDs.
-Ctrl+C to stop, then move to the systemd setup above once it looks right.
+Add one (or a few) test rows to the `Contact Import` tab, watch the terminal:
+you'll see `[DRY RUN]` lines for anything that would be created/updated, and
+the sheet gets a `Pipeline Status` of `DRY RUN - would push` (or `Rejected`/
+`Error`) plus the `Notes`/`ICP Verdict` columns filled in. A `DRY RUN` status
+does NOT count as "already processed" — once you flip `DRY_RUN=false` and
+rerun, those same rows will go through for real.
+
+Ctrl+C to stop. Once the dry run looks right, set `DRY_RUN=false`, clear the
+`Pipeline Status`/`Notes`/etc. columns on any rows you dry-ran (so they get
+reprocessed for real, cleanly), and move to the systemd setup above.
 
 ## Optional one-off maintenance scripts
 

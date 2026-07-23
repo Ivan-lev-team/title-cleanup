@@ -22,6 +22,12 @@ COMPANY_SHEET_NAME = os.environ.get("COMPANY_SHEET_NAME", "Company Import")
 POLL_INTERVAL_SECONDS = int(os.environ.get("POLL_INTERVAL_SECONDS", "300"))
 LEAD_SOURCE_VALUE = os.environ.get("LEAD_SOURCE_VALUE", "Event/Tradeshow")
 
+# When true: all HubSpot reads/searches still run live, but every
+# create/update/associate call is skipped and logged instead of executed.
+# Lets you test qualify -> dedupe -> enrich -> round-robin end to end
+# against real HubSpot data before ever writing to it.
+DRY_RUN = os.environ.get("DRY_RUN", "false").strip().lower() == "true"
+
 HUBSPOT_BASE = "https://api.hubapi.com"
 
 # Round-robin pods, validated against the Social Commerce Summit 2026 NYC run.
