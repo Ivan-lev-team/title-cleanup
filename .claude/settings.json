@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__HubSpot__search_crm_objects",
+      "mcp__HubSpot__get_crm_objects",
+      "mcp__HubSpot__search_properties",
+      "mcp__HubSpot__get_properties",
+      "mcp__HubSpot__search_owners",
+      "Bash(python3 classify_titles.py)"
+    ]
+  }
+}
