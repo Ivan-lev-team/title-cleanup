@@ -80,6 +80,8 @@ def process_row(row, company_import_by_domain=None):
             "Notes": f"Excluded: {reason}",
         }
 
+    is_agency = company_verdict == "AGENCY"
+
     # ---- STEP 2: check HubSpot (dedupe) ----
     existing_contact = hubspot_client.find_contact_by_email(email) if email else None
     existing_company = hubspot_client.find_company_by_domain(domain) if domain else None
@@ -102,27 +104,46 @@ def process_row(row, company_import_by_domain=None):
                 unverified_email = found["email"]
                 enrichment_note = f"Prospeo found an UNVERIFIED email ({found['status'] or 'unverified'}) -- not auto-used"
 
-    # ---- STEP 4: round robin (only for genuinely new companies without a pod) ----
+    # ---- STEP 4: round robin ----
+    # Agencies (AGENCY verdict) skip the normal Pod rotation entirely -- they
+    # go to the Partnerships team instead, tracked purely via sdr_owner
+    # (pod is intentionally left blank; HubSpot's "pod" enumeration has no
+    # Partnerships value). Everyone else follows the existing Pod round-robin,
+    # only for genuinely new companies / companies without an owner yet --
+    # an already-assigned company (pod OR partnership owner already set) is
+    # never reassigned.
     company_id = None
     if existing_company:
         company_id = existing_company["id"]
+        current_owner = (existing_company["properties"].get("sdr_owner") or "").strip()
         current_pod = (existing_company["properties"].get("pod") or "").strip()
-        if not current_pod:
+        if is_agency:
+            if not current_owner:
+                owner = hubspot_client.least_loaded_partnership_owner()
+                hubspot_client.update_company(company_id, {"sdr_owner": owner})
+            else:
+                owner = current_owner
+        elif not current_pod:
             pod = hubspot_client.least_loaded_pod()
             owner = hubspot_client.least_loaded_owner_in_pod(pod)
             hubspot_client.update_company(company_id, {"pod": pod, "sdr_owner": owner})
         else:
-            owner = (existing_company["properties"].get("sdr_owner") or "").strip()
+            owner = current_owner
     elif company_name:
-        pod = hubspot_client.least_loaded_pod()
-        owner = hubspot_client.least_loaded_owner_in_pod(pod)
         company_import_row = company_import_by_domain.get(domain)
         props = _build_company_create_props(company_name, domain, company_import_row)
-        props["pod"] = pod
-        # Company Import's own Company Owner (if present) takes priority over
-        # the round-robin SDR owner for hubspot_owner_id -- but sdr_owner
-        # (the pod-tracking property) always reflects the round-robin result.
-        props["sdr_owner"] = owner
+        if is_agency:
+            owner = hubspot_client.least_loaded_partnership_owner()
+            props["sdr_owner"] = owner
+        else:
+            pod = hubspot_client.least_loaded_pod()
+            owner = hubspot_client.least_loaded_owner_in_pod(pod)
+            props["pod"] = pod
+            # Company Import's own Company Owner (if present) takes priority
+            # over the round-robin SDR owner for hubspot_owner_id -- but
+            # sdr_owner (the pod-tracking property) always reflects the
+            # round-robin result.
+            props["sdr_owner"] = owner
         props.setdefault("hubspot_owner_id", owner)
         company_id = hubspot_client.create_company(props)
     else:
@@ -173,12 +194,14 @@ def process_row(row, company_import_by_domain=None):
         hubspot_client.associate_contact_to_company(contact_id, company_id)
 
     notes = enrichment_note
+    if is_agency:
+        notes = f"{notes} | Agency -- routed to Partnerships ({company_reason})".strip(" |")
     if unverified_email:
         notes = f"{notes} | Unverified email for manual review: {unverified_email}".strip(" |")
 
     return {
         "Pipeline Status": "Pushed",
-        "ICP Verdict": "PASS",
+        "ICP Verdict": "AGENCY" if is_agency else "PASS",
         "Already in HubSpot?": already_existed,
         "HubSpot Contact ID": contact_id,
         "HubSpot Company ID": company_id or "",

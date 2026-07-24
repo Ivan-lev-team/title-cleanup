@@ -20,14 +20,16 @@ _client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
 ICP_PROMPT = """Levanta is an affiliate/creator marketing platform. Its ICP (ideal customer profile) is: a brand that sells PHYSICAL CONSUMER PRODUCTS through Amazon, Walmart, and/or Shopify/DTC ecommerce. Levanta's customers are those brands (they buy affiliate marketing services to recruit creators/publishers to promote their products).
 
-NOT a fit (should FAIL): social/tech/media platforms, pure B2B SaaS/software companies, marketing/PR/creative agencies, management consultancies, law firms, financial institutions/banks/insurance, trade associations, staffing/talent agencies, event/conference organizers, and services companies that sell TO brands rather than being a brand themselves. Also FAIL: companies you cannot identify at all or that appear to be spam/junk/placeholder entries.
-
 IS a fit (should PASS): any company that is itself a physical consumer product brand across any category (beauty, wellness/supplements, food & beverage, apparel, home goods, pet products, electronics accessories, toys, etc.) that plausibly sells via Amazon/Walmart/Shopify/DTC -- even small/unknown brands, as long as they're a genuine product brand, not a service provider.
+
+AGENCY (not FAIL -- a distinct verdict): marketing/PR/creative agencies, influencer/talent/creator management agencies, and similar firms that represent or work on behalf of brands rather than being a brand themselves. These aren't Levanta's direct ICP customer, but they're valuable channel/referral partners, so they get routed to the Partnerships team instead of being rejected outright.
+
+NOT a fit at all (should FAIL): social/tech/media platforms, pure B2B SaaS/software companies, management consultancies, law firms, financial institutions/banks/insurance, trade associations, staffing agencies unrelated to marketing, event/conference organizers, and other services companies that sell TO brands (not agencies -- see AGENCY above) rather than being a brand themselves. Also FAIL: companies you cannot identify at all or that appear to be spam/junk/placeholder entries.
 
 Company name: {company}
 Domain: {domain}
 
-Respond with ONLY a JSON object, no other text: {{"verdict": "PASS" or "FAIL", "reason": "one short sentence"}}"""
+Respond with ONLY a JSON object, no other text: {{"verdict": "PASS" or "AGENCY" or "FAIL", "reason": "one short sentence"}}"""
 
 
 def title_qualify(title):
@@ -59,7 +61,7 @@ def company_icp_judge(company, domain):
         data = json.loads(text)
         verdict = data.get("verdict", "").upper()
         reason = data.get("reason", "")
-        if verdict not in ("PASS", "FAIL"):
+        if verdict not in ("PASS", "AGENCY", "FAIL"):
             raise ValueError(f"unexpected verdict value: {verdict}")
         return verdict, reason
     except Exception as e:

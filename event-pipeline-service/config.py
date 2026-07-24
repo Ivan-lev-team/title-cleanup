@@ -43,3 +43,10 @@ POD_OWNERS = {
     "Pod 6": ["86070116"],
     "Pod 7": ["87811816", "87811817"],
 }
+
+# Agencies (Anthropic ICP judge verdict "AGENCY") are not Levanta's direct
+# ICP but are valuable channel partners -- routed to Partnerships instead of
+# the normal Pod round-robin. "pod" is intentionally left blank for these
+# companies (HubSpot's "pod" enumeration has no Partnerships value); only
+# sdr_owner is set, round-robined between these two.
+PARTNERSHIP_OWNERS = ["87811821", "82954574"]  # Katerina Timchevska, Milosh Dimitrijevikj

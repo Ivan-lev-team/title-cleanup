@@ -150,6 +150,22 @@ def least_loaded_pod():
     return min(counts, key=counts.get)
 
 
+def least_loaded_partnership_owner():
+    """Same live-balance approach as least_loaded_owner_in_pod, but for
+    agency companies -- these have no "pod" set, so we balance directly off
+    each partnership owner's current company count instead of filtering by pod."""
+    counts = {}
+    for owner in config.PARTNERSHIP_OWNERS:
+        body = {
+            "filterGroups": [{"filters": [{"propertyName": "sdr_owner", "operator": "EQ", "value": owner}]}],
+            "properties": [],
+            "limit": 1,
+        }
+        resp = request_with_retry("POST", f"{BASE}/crm/v3/objects/companies/search", json=body)
+        counts[owner] = resp.json().get("total", 0) if resp.status_code < 300 else 0
+    return min(counts, key=counts.get)
+
+
 def least_loaded_owner_in_pod(pod):
     owners = config.POD_OWNERS[pod]
     if len(owners) == 1:
