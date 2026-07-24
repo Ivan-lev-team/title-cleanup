@@ -82,9 +82,29 @@ def process_row(row, company_import_by_domain=None):
 
     is_agency = company_verdict == "AGENCY"
 
-    # ---- STEP 2: check HubSpot (dedupe) ----
+    # ---- STEP 2: check HubSpot (dedupe + exclude already-known accounts) ----
     existing_contact = hubspot_client.find_contact_by_email(email) if email else None
-    existing_company = hubspot_client.find_company_by_domain(domain) if domain else None
+    existing_company = (
+        hubspot_client.find_company_by_domain(domain, company_name) if (domain or company_name) else None
+    )
+
+    dedupe_note = ""
+    if existing_company and existing_company["properties"].get("_dedupe_method") == "name_exact":
+        dedupe_note = (
+            f"Matched existing company \"{existing_company['properties'].get('name', '')}\" by name only "
+            "-- its domain field didn't match, worth checking for a data-quality issue"
+        )
+
+    contact_stage = (existing_contact or {}).get("properties", {}).get("lifecyclestage", "")
+    company_stage = (existing_company or {}).get("properties", {}).get("lifecyclestage", "")
+    if contact_stage in config.EXCLUDED_LIFECYCLE_STAGES or company_stage in config.EXCLUDED_LIFECYCLE_STAGES:
+        stage = contact_stage if contact_stage in config.EXCLUDED_LIFECYCLE_STAGES else company_stage
+        return {
+            "Pipeline Status": "Skipped",
+            "ICP Verdict": "AGENCY" if is_agency else "PASS",
+            "Already in HubSpot?": "Yes",
+            "Notes": f"Skipped: already an engaged HubSpot account (lifecyclestage={stage}), not treated as a fresh event lead",
+        }
 
     # ---- STEP 3: enrich, only now that we know this row is worth it ----
     enrichment_note = ""
@@ -152,16 +172,17 @@ def process_row(row, company_import_by_domain=None):
     # ---- STEP 5: push contact ----
     if existing_contact:
         contact_id = existing_contact["id"]
+        existing_props = existing_contact.get("properties", {})
         props = {}
-        if not (existing_contact.get("jobtitle") or "").strip() and title:
+        if not (existing_props.get("jobtitle") or "").strip() and title:
             props["jobtitle"] = title
-        if not (existing_contact.get("phone") or "").strip():
+        if not (existing_props.get("phone") or "").strip():
             ph = normalize_phone(phone or mobile)
             if ph:
                 props["phone"] = ph
-        if not (existing_contact.get("hs_linkedin_url") or "").strip() and linkedin:
+        if not (existing_props.get("hs_linkedin_url") or "").strip() and linkedin:
             props["hs_linkedin_url"] = linkedin
-        if not (existing_contact.get("hs_lead_status") or "").strip():
+        if not (existing_props.get("hs_lead_status") or "").strip():
             props["hs_lead_status"] = "NEW"
         props["how_did_you_hear_about_us_"] = config.LEAD_SOURCE_VALUE
         if event_name:
@@ -194,6 +215,8 @@ def process_row(row, company_import_by_domain=None):
         hubspot_client.associate_contact_to_company(contact_id, company_id)
 
     notes = enrichment_note
+    if dedupe_note:
+        notes = f"{notes} | {dedupe_note}".strip(" |")
     if is_agency:
         notes = f"{notes} | Agency -- routed to Partnerships ({company_reason})".strip(" |")
     if unverified_email:

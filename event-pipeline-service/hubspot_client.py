@@ -68,7 +68,7 @@ def find_contact_by_email(email):
         return None
     body = {
         "filterGroups": [{"filters": [{"propertyName": "email", "operator": "EQ", "value": email}]}],
-        "properties": ["email", "jobtitle", "phone", "hs_linkedin_url", "hs_lead_status"],
+        "properties": ["email", "jobtitle", "phone", "hs_linkedin_url", "hs_lead_status", "lifecyclestage"],
         "limit": 1,
     }
     resp = request_with_retry("POST", f"{BASE}/crm/v3/objects/contacts/search", json=body)
@@ -78,12 +78,23 @@ def find_contact_by_email(email):
     return results[0] if results else None
 
 
-def find_company_by_domain(domain):
-    if not domain:
-        return None
+COMPANY_PROPERTIES = ["name", "domain", "pod", "sdr_owner", "lifecyclestage"]
+
+
+def _normalize_domain(domain):
+    d = (domain or "").strip().lower()
+    for prefix in ("https://", "http://"):
+        if d.startswith(prefix):
+            d = d[len(prefix):]
+    if d.startswith("www."):
+        d = d[4:]
+    return d.rstrip("/").rstrip(".")
+
+
+def _company_search_eq(prop, value):
     body = {
-        "filterGroups": [{"filters": [{"propertyName": "domain", "operator": "EQ", "value": domain}]}],
-        "properties": ["name", "domain", "pod", "sdr_owner"],
+        "filterGroups": [{"filters": [{"propertyName": prop, "operator": "EQ", "value": value}]}],
+        "properties": COMPANY_PROPERTIES,
         "limit": 1,
     }
     resp = request_with_retry("POST", f"{BASE}/crm/v3/objects/companies/search", json=body)
@@ -91,6 +102,48 @@ def find_company_by_domain(domain):
         raise RuntimeError(f"company search failed: {resp.status_code} {resp.text[:300]}")
     results = resp.json().get("results", [])
     return results[0] if results else None
+
+
+def find_company_by_domain(domain, company_name=None):
+    """Looks up a company by domain first (a couple of normalized variants,
+    since real HubSpot data isn't always clean -- e.g. a legacy record
+    stored with domain "example" instead of "example.com" will silently
+    dodge a bare exact match and cause a duplicate company to get created).
+    Falls back to an exact case-insensitive NAME match when domain search
+    comes up empty and a company_name is given -- this is deliberately
+    conservative (exact name only, not fuzzy/CONTAINS) to avoid merging two
+    genuinely different companies that happen to share a similar name.
+    Adds a "_dedupe_method" key to the returned properties dict so callers
+    can flag a name-only match for manual review (domain data quality issue,
+    not a guaranteed dedupe)."""
+    normalized = _normalize_domain(domain)
+    candidates = []
+    if normalized:
+        candidates.append(normalized)
+        candidates.append("www." + normalized)
+
+    for candidate in candidates:
+        record = _company_search_eq("domain", candidate)
+        if record:
+            record["properties"]["_dedupe_method"] = "domain"
+            return record
+
+    if company_name:
+        body = {
+            "query": company_name,
+            "properties": COMPANY_PROPERTIES,
+            "limit": 5,
+        }
+        resp = request_with_retry("POST", f"{BASE}/crm/v3/objects/companies/search", json=body)
+        if resp.status_code >= 300:
+            raise RuntimeError(f"company name search failed: {resp.status_code} {resp.text[:300]}")
+        name_lower = company_name.strip().lower()
+        for r in resp.json().get("results", []):
+            if (r["properties"].get("name") or "").strip().lower() == name_lower:
+                r["properties"]["_dedupe_method"] = "name_exact"
+                return r
+
+    return None
 
 
 def find_owner_id_by_email(email):

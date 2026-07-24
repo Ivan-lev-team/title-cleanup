@@ -6,6 +6,24 @@ enrich -> round-robin -> push**. Enrichment (Prospeo) only ever runs on rows
 that already survived qualify + dedupe, so no credits are spent on rows
 that would be filtered out anyway.
 
+Step 2 (check HubSpot) does two things, found necessary from a real incident
+(an existing Sales-Qualified-Lead contact tied to a 6-deal former-customer
+company got swept into an event push and mis-tagged as a fresh NEW lead):
+- **Company dedupe is domain-first with a name fallback.** `find_company_by_domain`
+  tries a couple of normalized domain variants, then falls back to an exact
+  (case-insensitive) company NAME match if domain search comes up empty --
+  this catches legacy records with messy domain data (e.g. a company stored
+  as domain `example` instead of `example.com`) that would otherwise dodge
+  dedupe and get duplicated. A name-only match gets flagged in the sheet's
+  `Notes` column for manual review, since it's not as airtight as a domain match.
+- **Already-engaged accounts are skipped entirely.** If the matched contact
+  or company's `lifecyclestage` is in `config.EXCLUDED_LIFECYCLE_STAGES`
+  (Termed/customer, Working, Sales Qualified Lead, Trial, Paid Monthly,
+  Winback), the row is marked `Skipped` before any enrichment, tagging, or
+  pod/owner assignment happens -- these are known accounts, not fresh event
+  leads, and re-tagging them risks SDRs treating a real customer relationship
+  as a cold lead.
+
 ## What you need before deploying
 
 1. **HubSpot Private App token** — Settings -> Integrations -> Private Apps.

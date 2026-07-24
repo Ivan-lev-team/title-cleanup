@@ -55,3 +55,19 @@ POD_OWNERS = {
 # the marketing-agency sub-type (Jose Alvarado, Iliana Santos) are no longer
 # on the team, so both sub-types share this one pair for now.
 PARTNERSHIP_OWNERS = ["87811821", "82954574"]  # Katerina Timchevska, Milosh Dimitrijevikj
+
+# Lifecyclestage values (this portal's actual internal values, not labels --
+# see HubSpot's "lifecyclestage" enumeration) that mean "already a known,
+# engaged account" -- these should never get re-tagged as a fresh event lead
+# or have enrichment credits spent on them. Found via a real incident: an
+# existing contact (already Sales Qualified Lead, tied to a company with 6
+# closed deals and lifecyclestage "customer"/Termed) got swept into an event
+# push and mis-tagged hs_lead_status=NEW because this check didn't exist yet.
+EXCLUDED_LIFECYCLE_STAGES = {
+    "customer",      # "Termed" in this portal's picklist -- a former/lapsed customer
+    "252225308",     # "Working" -- actively being worked by sales
+    "1195095563",    # "Sales Qualified Lead"
+    "53309303",      # "Trial"
+    "53292289",      # "Paid Monthly"
+    "252145708",     # "Winback"
+}
