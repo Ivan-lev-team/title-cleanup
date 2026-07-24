@@ -93,6 +93,35 @@ def find_company_by_domain(domain):
     return results[0] if results else None
 
 
+def company_has_open_deal(company_id):
+    """True if the company has at least one OPEN (not closed-won/closed-lost)
+    associated deal -- used to skip companies Sales is already actively working,
+    so an event attendee doesn't get re-tagged over a live opportunity. Returns
+    False (i.e. don't skip) on any lookup failure, so a transient API hiccup
+    never silently drops a lead. Requires the token's crm.objects.deals.read
+    scope; without it the deals call 403s and this returns False."""
+    if not company_id:
+        return False
+    resp = request_with_retry(
+        "GET", f"{BASE}/crm/v4/objects/companies/{company_id}/associations/deals", params={"limit": 100}
+    )
+    if resp.status_code >= 300:
+        return False
+    deal_ids = [r.get("toObjectId") for r in resp.json().get("results", []) if r.get("toObjectId")]
+    if not deal_ids:
+        return False
+    body = {"inputs": [{"id": str(d)} for d in deal_ids], "properties": ["dealstage", "hs_is_closed"]}
+    resp = request_with_retry("POST", f"{BASE}/crm/v3/objects/deals/batch/read", json=body)
+    if resp.status_code >= 300:
+        return False
+    for d in resp.json().get("results", []):
+        # hs_is_closed is a calculated bool returned as the string "true"/"false";
+        # anything other than "true" (open, or unset) counts as an open deal.
+        if (d.get("properties", {}).get("hs_is_closed") or "").strip().lower() != "true":
+            return True
+    return False
+
+
 def find_owner_id_by_email(email):
     """The template's 'Contact Owner' / 'Company Owner' columns are HubSpot
     user emails, not numeric IDs -- resolve here before setting hubspot_owner_id."""

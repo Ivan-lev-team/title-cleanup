@@ -104,6 +104,16 @@ def process_row(row, company_import_by_domain=None):
             "Notes": "Skipped: existing HubSpot customer",
         }
 
+    # Companies Sales is already actively working (an open deal) are also
+    # skipped -- don't re-tag a live opportunity as a fresh event lead.
+    if existing_company and hubspot_client.company_has_open_deal(existing_company["id"]):
+        return {
+            "Pipeline Status": "Skipped",
+            "ICP Verdict": "AGENCY" if is_agency else "PASS",
+            "Already in HubSpot?": "Yes",
+            "Notes": "Skipped: company has an open deal",
+        }
+
     full_name = f"{first_name} {last_name}".strip()
 
     # ---- STEP 3: enrich email (waterfall: LeadMagic -> Prospeo) ----
