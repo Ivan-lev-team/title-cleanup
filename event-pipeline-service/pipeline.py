@@ -7,10 +7,18 @@ filtered out anyway.
 """
 import qualify
 import hubspot_client
-import prospeo_client
+import enrichment
 import config
 
 normalize_phone = hubspot_client.normalize_phone
+
+
+def _is_customer(record):
+    """True if a matched HubSpot contact/company is already a customer -- we
+    skip those rather than re-tag existing customers as fresh event leads."""
+    if not record:
+        return False
+    return (record["properties"].get("lifecyclestage") or "").strip().lower() == "customer"
 
 # Company Import tab -> HubSpot company property. "Company Owner" is handled
 # separately (needs email->ID resolution), not a straight copy.
@@ -86,23 +94,58 @@ def process_row(row, company_import_by_domain=None):
     existing_contact = hubspot_client.find_contact_by_email(email) if email else None
     existing_company = hubspot_client.find_company_by_domain(domain) if domain else None
 
-    # ---- STEP 3: enrich, only now that we know this row is worth it ----
+    # Existing customers are skipped outright -- no update, no event re-tag,
+    # and (by returning before Step 3) no enrichment credits spent.
+    if _is_customer(existing_contact) or _is_customer(existing_company):
+        return {
+            "Pipeline Status": "Skipped",
+            "ICP Verdict": "AGENCY" if is_agency else "PASS",
+            "Already in HubSpot?": "Yes",
+            "Notes": "Skipped: existing HubSpot customer",
+        }
+
+    full_name = f"{first_name} {last_name}".strip()
+
+    # ---- STEP 3: enrich email (waterfall: LeadMagic -> Prospeo) ----
+    # Only for rows with no email and no existing contact. Strict: only a
+    # verified email is auto-used; an unverified hit is left for manual review.
     enrichment_note = ""
     unverified_email = ""
+    enriched_email = ""   # written back to the sheet's Email column when found
     if not email and not existing_contact:
-        full_name = f"{first_name} {last_name}".strip()
-        found = prospeo_client.enrich_person(full_name, company_name, domain, linkedin_url=linkedin)
-        if found.get("linkedin_url") and not linkedin:
+        found = enrichment.find_email(first_name, last_name, full_name, company_name, domain, linkedin)
+        if found["linkedin_url"] and not linkedin:
             linkedin = found["linkedin_url"]
-        if found.get("email"):
-            if found["status"] == "VERIFIED":
-                email = found["email"]
-                enrichment_note = "Email found via Prospeo (VERIFIED)"
-                # re-check HubSpot now that we have an email we didn't have before
-                existing_contact = hubspot_client.find_contact_by_email(email)
-            else:
-                unverified_email = found["email"]
-                enrichment_note = f"Prospeo found an UNVERIFIED email ({found['status'] or 'unverified'}) -- not auto-used"
+        if found["email"]:
+            email = found["email"]
+            enriched_email = email
+            enrichment_note = f"Email found via {found['provider']} (verified)"
+            # re-check HubSpot now that we have an email we didn't have before
+            existing_contact = hubspot_client.find_contact_by_email(email)
+            if _is_customer(existing_contact):
+                return {
+                    "Pipeline Status": "Skipped",
+                    "ICP Verdict": "AGENCY" if is_agency else "PASS",
+                    "Already in HubSpot?": "Yes",
+                    "Notes": "Skipped: existing HubSpot customer (matched on enriched email)",
+                }
+        elif found["unverified_email"]:
+            unverified_email = found["unverified_email"]
+            enrichment_note = found["unverified_note"]
+
+    # ---- STEP 3.5: enrich mobile (waterfall: Prospeo -> Forager -> LeadMagic) ----
+    # Flag-gated (ENRICH_MOBILE) and only for rows with no phone yet whose
+    # matched contact (if any) also lacks a phone -- never spend mobile credits
+    # on a contact that already has a number.
+    enriched_mobile = ""
+    mobile_note = ""
+    existing_has_phone = bool(existing_contact and (existing_contact["properties"].get("phone") or "").strip())
+    if config.ENRICH_MOBILE and not phone and not mobile and not existing_has_phone:
+        mob = enrichment.find_mobile(full_name, first_name, last_name, company_name,
+                                     domain, linkedin_url=linkedin, email=email or unverified_email)
+        if mob["mobile"]:
+            enriched_mobile = mob["mobile"]
+            mobile_note = f"Mobile found via {mob['provider']}"
 
     # ---- STEP 4: round robin ----
     # Agencies (AGENCY verdict) skip the normal Pod rotation entirely -- they
@@ -153,15 +196,18 @@ def process_row(row, company_import_by_domain=None):
     if existing_contact:
         contact_id = existing_contact["id"]
         props = {}
-        if not (existing_contact.get("jobtitle") or "").strip() and title:
+        if not (existing_contact["properties"].get("jobtitle") or "").strip() and title:
             props["jobtitle"] = title
-        if not (existing_contact.get("phone") or "").strip():
-            ph = normalize_phone(phone or mobile)
+        if not (existing_contact["properties"].get("phone") or "").strip():
+            ph = normalize_phone(phone or mobile or enriched_mobile)
             if ph:
                 props["phone"] = ph
-        if not (existing_contact.get("hs_linkedin_url") or "").strip() and linkedin:
+            mp = normalize_phone(mobile or enriched_mobile)
+            if mp:
+                props["mobilephone"] = mp
+        if not (existing_contact["properties"].get("hs_linkedin_url") or "").strip() and linkedin:
             props["hs_linkedin_url"] = linkedin
-        if not (existing_contact.get("hs_lead_status") or "").strip():
+        if not (existing_contact["properties"].get("hs_lead_status") or "").strip():
             props["hs_lead_status"] = "NEW"
         props["how_did_you_hear_about_us_"] = config.LEAD_SOURCE_VALUE
         if event_name:
@@ -176,9 +222,12 @@ def process_row(row, company_import_by_domain=None):
             props["jobtitle"] = title
         if email:
             props["email"] = email
-        ph = normalize_phone(phone or mobile)
+        ph = normalize_phone(phone or mobile or enriched_mobile)
         if ph:
             props["phone"] = ph
+        mp = normalize_phone(mobile or enriched_mobile)
+        if mp:
+            props["mobilephone"] = mp
         if linkedin:
             props["hs_linkedin_url"] = linkedin
         props["hs_lead_status"] = "NEW"
@@ -196,10 +245,12 @@ def process_row(row, company_import_by_domain=None):
     notes = enrichment_note
     if is_agency:
         notes = f"{notes} | Agency -- routed to Partnerships ({company_reason})".strip(" |")
+    if mobile_note:
+        notes = f"{notes} | {mobile_note}".strip(" |")
     if unverified_email:
         notes = f"{notes} | Unverified email for manual review: {unverified_email}".strip(" |")
 
-    return {
+    result = {
         "Pipeline Status": "Pushed",
         "ICP Verdict": "AGENCY" if is_agency else "PASS",
         "Already in HubSpot?": already_existed,
@@ -207,3 +258,11 @@ def process_row(row, company_import_by_domain=None):
         "HubSpot Company ID": company_id or "",
         "Notes": notes,
     }
+    # Reflect enriched values back onto the sheet's input columns so the sheet
+    # shows what we found. write_result only writes header columns that exist,
+    # and both of these are standard template columns.
+    if enriched_email:
+        result["Email"] = enriched_email
+    if enriched_mobile:
+        result["Mobile Phone Number"] = enriched_mobile
+    return result

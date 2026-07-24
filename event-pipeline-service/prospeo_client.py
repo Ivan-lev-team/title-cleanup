@@ -77,3 +77,38 @@ def enrich_person(full_name, company_name, domain, linkedin_url="", email=""):
         "linkedin_url": (person.get("linkedin_url") or "").strip(),
     }
     return result
+
+
+def find_mobile(full_name, company_name, domain, linkedin_url="", email=""):
+    """Tier-1 of the mobile waterfall (see enrichment.py). Returns
+    {"mobile": str, "verified": bool}; the empty dict when no key or no minimum
+    match. Uses the same bulk-enrich-person call as the manual enrich_mobiles.py
+    script -- enrich_mobile=True (mobiles cost ~10 credits per hit, vs. 1 for an
+    email, which is why this only ever runs on rows with no phone yet), and the
+    number is accepted only when Prospeo marks it `revealed`."""
+    empty = {"mobile": "", "verified": False}
+    if not config.PROSPEO_KEY:
+        return empty
+
+    item = _build_item(full_name, linkedin_url, email, company_name, domain)
+    if not _has_min_match(item):
+        return empty
+
+    resp = requests.post(
+        PROSPEO_URL,
+        headers={"X-KEY": config.PROSPEO_KEY, "Content-Type": "application/json"},
+        json={"only_verified_email": False, "enrich_mobile": True, "only_verified_mobile": False, "data": [item]},
+        timeout=120,
+    )
+    if resp.status_code != 200:
+        return empty
+
+    matched = resp.json().get("matched", [])
+    if not matched:
+        return empty
+
+    mobile_obj = (matched[0].get("person") or {}).get("mobile") or {}
+    num = (mobile_obj.get("mobile_international") or mobile_obj.get("mobile") or "").strip()
+    if num and mobile_obj.get("revealed"):
+        return {"mobile": num, "verified": True}
+    return empty
