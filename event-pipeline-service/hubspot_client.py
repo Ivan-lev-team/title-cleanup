@@ -110,6 +110,13 @@ _COMPANY_SUFFIXES = (
     " corporation", " co", " company", " group", " holdings", " plc", " pbc",
 )
 
+_DOMAIN_TLDS = (
+    ".com", ".co", ".io", ".net", ".org", ".us", ".ai", ".shop", ".store",
+    ".biz", ".info", ".life", ".xyz",
+)
+
+_MIN_SLUG_MATCH_LEN = 8  # below this, containment checks are too likely to false-positive
+
 
 def _normalize_company_name(name):
     """Strips punctuation and common corporate suffixes so "Lux Decor
@@ -128,64 +135,143 @@ def _normalize_company_name(name):
     return n
 
 
-def find_company_by_domain(domain, company_name=None):
-    """Looks up a company by domain first (a couple of normalized variants,
-    since real HubSpot data isn't always clean -- e.g. a legacy record
-    stored with domain "example" instead of "example.com" will silently
-    dodge a bare exact match and cause a duplicate company to get created).
-    Falls back to a NAME match when domain search comes up empty and a
-    company_name is given, tried in order: exact (case-insensitive), then
-    normalized-name variations (punctuation/corporate-suffix stripped, e.g.
-    "Lux Decor Collection" vs "LDC Lux Decor Collection, Inc."). Every
-    fallback match gets a "_dedupe_method" key on the returned properties
-    dict so callers can flag anything short of an exact domain match for
-    manual review -- name-based matching is inherently lower-confidence."""
-    normalized = _normalize_domain(domain)
-    candidates = []
-    if normalized:
-        candidates.append(normalized)
-        candidates.append("www." + normalized)
+def _slug(text):
+    """Alphanumeric-only, no spaces -- for comparing a name against a domain
+    root ("Lux Decor Collection" -> "luxdecorcollection", matchable against
+    domain "luxdecorcollection.com" or a legacy record stored as just
+    "luxdecorcollection")."""
+    return re.sub(r"[^a-z0-9]", "", (text or "").lower())
 
-    for candidate in candidates:
+
+def _domain_root_slug(domain):
+    d = _normalize_domain(domain)
+    for tld in _DOMAIN_TLDS:
+        if d.endswith(tld):
+            d = d[: -len(tld)]
+            break
+    return _slug(d)
+
+
+def _acronym_of(name):
+    """First letter of each significant word, e.g. "Lux Decor Collection" -> "ldc"."""
+    words = _normalize_company_name(name).split()
+    return "".join(w[0] for w in words if w)
+
+
+def _names_plausibly_match(name_a, name_b):
+    """True if two company names are plausibly the same company, tried via
+    several independent signals so a single quirky formatting difference
+    doesn't cause a miss. Every non-exact path here trades a little false-
+    positive risk for meaningfully higher recall -- deliberate, since missing
+    an existing account (especially a customer) is the worse failure mode."""
+    if not name_a or not name_b:
+        return False
+    a_lower, b_lower = name_a.strip().lower(), name_b.strip().lower()
+    if a_lower == b_lower:
+        return True
+
+    norm_a, norm_b = _normalize_company_name(name_a), _normalize_company_name(name_b)
+    if norm_a and norm_a == norm_b:
+        return True
+
+    slug_a, slug_b = _slug(norm_a), _slug(norm_b)
+    if slug_a and slug_b:
+        if slug_a == slug_b:
+            return True
+        shorter, longer = sorted((slug_a, slug_b), key=len)
+        if len(shorter) >= _MIN_SLUG_MATCH_LEN and shorter in longer:
+            return True
+
+    # acronym in either direction: "LDC" vs "Lux Decor Collection"
+    for short_name, long_name in ((name_a, name_b), (name_b, name_a)):
+        short_slug = _slug(short_name)
+        if 2 <= len(short_slug) <= 6 and short_slug.isalpha() and short_slug == _acronym_of(long_name):
+            return True
+
+    return False
+
+
+def _slugs_plausibly_match(slug_a, slug_b):
+    """Same containment logic as _names_plausibly_match's slug check, for
+    comparing two already-slugged strings directly (e.g. two domain roots)."""
+    if slug_a == slug_b:
+        return True
+    shorter, longer = sorted((slug_a, slug_b), key=len)
+    return len(shorter) >= _MIN_SLUG_MATCH_LEN and shorter in longer
+
+
+def _company_name_search(query_text, limit=10):
+    body = {"query": query_text, "properties": COMPANY_PROPERTIES, "limit": limit}
+    resp = request_with_retry("POST", f"{BASE}/crm/v3/objects/companies/search", json=body)
+    if resp.status_code >= 300:
+        raise RuntimeError(f"company name search failed: {resp.status_code} {resp.text[:300]}")
+    return resp.json().get("results", [])
+
+
+def find_company_by_domain(domain, company_name=None):
+    """Looks up a company by domain first (normalized variants, since real
+    HubSpot data isn't always clean -- e.g. a legacy record stored with
+    domain "example" instead of "example.com" would silently dodge a bare
+    exact match and cause a duplicate company to get created).
+
+    Automatically falls back to name-based matching when domain search comes
+    up empty -- tries MULTIPLE independent variations (exact name, corporate-
+    suffix-stripped, slug/no-spaces comparison against both the candidate's
+    name AND its own domain root, acronym detection) across candidates
+    pulled from more than one search query, so a single formatting quirk
+    can't cause a miss. This is deliberately biased toward higher recall:
+    missing an existing account -- especially an existing customer -- and
+    re-tagging them as a fresh cold lead is the worse failure mode, worse
+    than an occasional over-eager match. Every fallback match still gets a
+    "_dedupe_method" key on the returned properties dict so callers can note
+    which signal found it."""
+    normalized = _normalize_domain(domain)
+    for candidate in filter(None, [normalized, ("www." + normalized) if normalized else None]):
         record = _company_search_eq("domain", candidate)
         if record:
             record["properties"]["_dedupe_method"] = "domain"
             return record
 
-    if company_name:
-        body = {
-            "query": company_name,
-            "properties": COMPANY_PROPERTIES,
-            "limit": 10,
-        }
-        resp = request_with_retry("POST", f"{BASE}/crm/v3/objects/companies/search", json=body)
-        if resp.status_code >= 300:
-            raise RuntimeError(f"company name search failed: {resp.status_code} {resp.text[:300]}")
-        results = resp.json().get("results", [])
+    if not company_name and not domain:
+        return None
 
+    # Pull candidates from every angle we've got: the name as given, and the
+    # domain's root word (covers cases where HubSpot's stored name differs a
+    # lot from ours, but the domain root still resembles it, e.g. our row
+    # says "LDC" but HubSpot has "Lux Decor Collection" at luxdecorcollection.com).
+    seen_ids = set()
+    candidates = []
+    domain_root = _domain_root_slug(domain) if domain else ""
+    for query_text in filter(None, [company_name, domain_root]):
+        for r in _company_name_search(query_text):
+            if r["id"] not in seen_ids:
+                seen_ids.add(r["id"])
+                candidates.append(r)
+
+    if not candidates:
+        return None
+
+    # exact case-insensitive name match first (highest confidence)
+    if company_name:
         name_lower = company_name.strip().lower()
-        for r in results:
+        for r in candidates:
             if (r["properties"].get("name") or "").strip().lower() == name_lower:
                 r["properties"]["_dedupe_method"] = "name_exact"
                 return r
 
-        normalized_query = _normalize_company_name(company_name)
-        if normalized_query:
-            for r in results:
-                normalized_candidate = _normalize_company_name(r["properties"].get("name"))
-                if not normalized_candidate:
-                    continue
-                if normalized_candidate == normalized_query:
-                    r["properties"]["_dedupe_method"] = "name_variation"
-                    return r
-                # substring containment (e.g. "Lux Decor Collection" inside
-                # "LDC Lux Decor Collection") is only trustworthy once both
-                # names are long enough that a short generic name (e.g. "100"
-                # inside "100 Percent") can't false-positive-match
-                shorter, longer = sorted((normalized_candidate, normalized_query), key=len)
-                if len(shorter) >= 8 and shorter in longer:
-                    r["properties"]["_dedupe_method"] = "name_variation"
-                    return r
+    # then every other signal: normalized name, slug containment, acronym,
+    # AND cross-checking the candidate's own domain root against our name/domain
+    for r in candidates:
+        candidate_name = r["properties"].get("name")
+        candidate_domain_root = _domain_root_slug(r["properties"].get("domain"))
+        matched = (
+            (company_name and _names_plausibly_match(company_name, candidate_name))
+            or (domain_root and candidate_domain_root and _slugs_plausibly_match(domain_root, candidate_domain_root))
+            or (domain_root and candidate_name and _names_plausibly_match(domain_root, candidate_name))
+        )
+        if matched:
+            r["properties"]["_dedupe_method"] = "name_variation"
+            return r
 
     return None
 
