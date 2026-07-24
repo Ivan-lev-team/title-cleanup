@@ -73,12 +73,15 @@ def get_unprocessed_rows(sheet_name):
 
 
 def write_result(worksheet, row_number, header, results):
-    """results: dict subset of RESULT_COLS -> value."""
+    """results: dict of column-name -> value. Written with value_input_option
+    RAW so values are stored literally -- an enriched phone like '+1 831...'
+    (or a Note starting with '=', '+', '-') must never be parsed by Sheets as a
+    formula, which turns the cell into '#ERROR!'."""
     for col_name, value in results.items():
         if col_name not in header:
             continue
-        col_idx = header.index(col_name) + 1
-        worksheet.update_cell(row_number, col_idx, value)
+        a1 = gspread.utils.rowcol_to_a1(row_number, header.index(col_name) + 1)
+        worksheet.update(range_name=a1, values=[[value]], value_input_option="RAW")
 
 
 def get_company_import_by_domain():

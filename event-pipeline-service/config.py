@@ -13,9 +13,23 @@ def _require(name):
 
 HUBSPOT_TOKEN = _require("HUBSPOT_TOKEN")
 ANTHROPIC_API_KEY = _require("ANTHROPIC_API_KEY")
-PROSPEO_KEY = os.environ.get("PROSPEO_KEY", "")  # optional -- enrichment skipped if blank
 GOOGLE_SERVICE_ACCOUNT_JSON = _require("GOOGLE_SERVICE_ACCOUNT_JSON")
 GOOGLE_SHEET_ID = _require("GOOGLE_SHEET_ID")
+
+# Enrichment providers. All optional -- each waterfall tier auto-skips when its
+# key is blank (Forager also needs FORAGER_ACCOUNT_ID, which is part of every
+# Forager API path). Waterfall order is fixed in enrichment.py:
+#   email  = LeadMagic -> Prospeo
+#   mobile = Prospeo -> Forager -> LeadMagic
+PROSPEO_KEY = os.environ.get("PROSPEO_KEY", "")
+LEADMAGIC_KEY = os.environ.get("LEADMAGIC_KEY", "")
+FORAGER_KEY = os.environ.get("FORAGER_KEY", "")
+FORAGER_ACCOUNT_ID = os.environ.get("FORAGER_ACCOUNT_ID", "")
+
+# Mobile lookups are the expensive tier (Prospeo ~10cr, Forager 15cr,
+# LeadMagic 5cr per hit), so they're gated behind this flag. Email enrichment
+# always runs; set ENRICH_MOBILE=false to skip the mobile waterfall entirely.
+ENRICH_MOBILE = os.environ.get("ENRICH_MOBILE", "true").strip().lower() == "true"
 
 CONTACT_SHEET_NAME = os.environ.get("CONTACT_SHEET_NAME", "Contact Import")
 COMPANY_SHEET_NAME = os.environ.get("COMPANY_SHEET_NAME", "Company Import")
