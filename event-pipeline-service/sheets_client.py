@@ -60,9 +60,13 @@ def get_unprocessed_rows(sheet_name):
     unprocessed = []
     for i, row in enumerate(all_values[1:], start=2):  # sheet row 2 = first data row
         row = row + [""] * (len(header) - len(row))  # pad short rows
-        # a "DRY RUN" status doesn't count as processed -- rows must still
-        # go through for real once DRY_RUN is turned off
-        if row[status_idx].strip() and not row[status_idx].strip().upper().startswith("DRY RUN"):
+        # Any non-empty Pipeline Status means the row is DONE -- skip it, never
+        # re-run or re-enrich (a row whose email enrichment missed would
+        # otherwise re-spend credits on every poll). This includes DRY RUN
+        # rows: to push them for real, clear their Pipeline Status so they
+        # reprocess. Recommended flow: dry-run with throwaway rows you delete,
+        # then go live and drop real rows.
+        if row[status_idx].strip():
             continue  # already processed
         row_dict = dict(zip(header, row))
         # skip genuinely empty rows and the template's example/instruction row
