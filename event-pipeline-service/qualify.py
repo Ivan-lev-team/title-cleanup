@@ -54,8 +54,10 @@ def company_icp_judge(company, domain):
         max_tokens=200,
         messages=[{"role": "user", "content": prompt}],
     )
-    text = resp.content[0].text.strip()
     try:
+        # response may lead with a thinking block on newer models -- take the
+        # first text block rather than blindly assuming content[0] is text
+        text = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), "").strip()
         # model may wrap the JSON in a code fence despite instructions; strip if so
         if text.startswith("```"):
             text = text.strip("`")
