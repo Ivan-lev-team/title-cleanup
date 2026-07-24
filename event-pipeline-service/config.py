@@ -48,5 +48,10 @@ POD_OWNERS = {
 # ICP but are valuable channel partners -- routed to Partnerships instead of
 # the normal Pod round-robin. "pod" is intentionally left blank for these
 # companies (HubSpot's "pod" enumeration has no Partnerships value); only
-# sdr_owner is set, round-robined between these two.
+# sdr_owner is set, round-robined between these two. Per the Partnerships
+# team's "ICP for PDRs when Prospecting" doc, this covers BOTH agency
+# sub-types (Amazon/Walmart/Shopify service agencies AND Influencer/
+# Affiliate/Digital Marketing agencies) -- the doc's other listed PDRs for
+# the marketing-agency sub-type (Jose Alvarado, Iliana Santos) are no longer
+# on the team, so both sub-types share this one pair for now.
 PARTNERSHIP_OWNERS = ["87811821", "82954574"]  # Katerina Timchevska, Milosh Dimitrijevikj
