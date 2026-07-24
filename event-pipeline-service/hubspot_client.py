@@ -19,6 +19,7 @@ Two things layered on top of that proven logic for this service:
   2. Round-robin is live-balanced off current HubSpot company counts per
      Pod, not a fixed cycle position -- no local state to lose or desync.
 """
+import re
 import time
 import requests
 
@@ -104,18 +105,41 @@ def _company_search_eq(prop, value):
     return results[0] if results else None
 
 
+_COMPANY_SUFFIXES = (
+    " inc", " incorporated", " llc", " l.l.c", " ltd", " limited", " corp",
+    " corporation", " co", " company", " group", " holdings", " plc", " pbc",
+)
+
+
+def _normalize_company_name(name):
+    """Strips punctuation and common corporate suffixes so "Lux Decor
+    Collection", "Lux Decor Collection, Inc.", and "LDC Lux Decor Collection"
+    can be recognized as plausibly-the-same-company variations."""
+    n = (name or "").strip().lower()
+    n = re.sub(r"[^\w\s]", " ", n)  # strip punctuation (periods, commas, &, ®, etc.)
+    n = re.sub(r"\s+", " ", n).strip()
+    changed = True
+    while changed:
+        changed = False
+        for suffix in _COMPANY_SUFFIXES:
+            if n.endswith(suffix.strip()) and n != suffix.strip():
+                n = n[: -len(suffix.strip())].strip()
+                changed = True
+    return n
+
+
 def find_company_by_domain(domain, company_name=None):
     """Looks up a company by domain first (a couple of normalized variants,
     since real HubSpot data isn't always clean -- e.g. a legacy record
     stored with domain "example" instead of "example.com" will silently
     dodge a bare exact match and cause a duplicate company to get created).
-    Falls back to an exact case-insensitive NAME match when domain search
-    comes up empty and a company_name is given -- this is deliberately
-    conservative (exact name only, not fuzzy/CONTAINS) to avoid merging two
-    genuinely different companies that happen to share a similar name.
-    Adds a "_dedupe_method" key to the returned properties dict so callers
-    can flag a name-only match for manual review (domain data quality issue,
-    not a guaranteed dedupe)."""
+    Falls back to a NAME match when domain search comes up empty and a
+    company_name is given, tried in order: exact (case-insensitive), then
+    normalized-name variations (punctuation/corporate-suffix stripped, e.g.
+    "Lux Decor Collection" vs "LDC Lux Decor Collection, Inc."). Every
+    fallback match gets a "_dedupe_method" key on the returned properties
+    dict so callers can flag anything short of an exact domain match for
+    manual review -- name-based matching is inherently lower-confidence."""
     normalized = _normalize_domain(domain)
     candidates = []
     if normalized:
@@ -132,16 +156,36 @@ def find_company_by_domain(domain, company_name=None):
         body = {
             "query": company_name,
             "properties": COMPANY_PROPERTIES,
-            "limit": 5,
+            "limit": 10,
         }
         resp = request_with_retry("POST", f"{BASE}/crm/v3/objects/companies/search", json=body)
         if resp.status_code >= 300:
             raise RuntimeError(f"company name search failed: {resp.status_code} {resp.text[:300]}")
+        results = resp.json().get("results", [])
+
         name_lower = company_name.strip().lower()
-        for r in resp.json().get("results", []):
+        for r in results:
             if (r["properties"].get("name") or "").strip().lower() == name_lower:
                 r["properties"]["_dedupe_method"] = "name_exact"
                 return r
+
+        normalized_query = _normalize_company_name(company_name)
+        if normalized_query:
+            for r in results:
+                normalized_candidate = _normalize_company_name(r["properties"].get("name"))
+                if not normalized_candidate:
+                    continue
+                if normalized_candidate == normalized_query:
+                    r["properties"]["_dedupe_method"] = "name_variation"
+                    return r
+                # substring containment (e.g. "Lux Decor Collection" inside
+                # "LDC Lux Decor Collection") is only trustworthy once both
+                # names are long enough that a short generic name (e.g. "100"
+                # inside "100 Percent") can't false-positive-match
+                shorter, longer = sorted((normalized_candidate, normalized_query), key=len)
+                if len(shorter) >= 8 and shorter in longer:
+                    r["properties"]["_dedupe_method"] = "name_variation"
+                    return r
 
     return None
 

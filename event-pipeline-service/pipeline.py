@@ -89,10 +89,16 @@ def process_row(row, company_import_by_domain=None):
     )
 
     dedupe_note = ""
-    if existing_company and existing_company["properties"].get("_dedupe_method") == "name_exact":
+    dedupe_method = (existing_company or {}).get("properties", {}).get("_dedupe_method")
+    if dedupe_method == "name_exact":
         dedupe_note = (
             f"Matched existing company \"{existing_company['properties'].get('name', '')}\" by name only "
             "-- its domain field didn't match, worth checking for a data-quality issue"
+        )
+    elif dedupe_method == "name_variation":
+        dedupe_note = (
+            f"Matched existing company \"{existing_company['properties'].get('name', '')}\" by a NAME VARIATION "
+            "(not exact) -- please double check this is really the same company before trusting the pod/owner assignment"
         )
 
     contact_stage = (existing_contact or {}).get("properties", {}).get("lifecyclestage", "")
