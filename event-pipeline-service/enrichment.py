@@ -7,6 +7,8 @@ Order (Levanta's chosen provider preference):
   - Email:  LeadMagic -> Prospeo         (stop at first VERIFIED email; strict --
             catch-all / unknown are recorded for review, never auto-used)
   - Mobile: Prospeo -> Forager -> LeadMagic   (stop at first number found)
+  - Revenue (company, by domain): StoreLeads -> LeadMagic -> Prospeo (config
+            REVENUE_ORDER); stop at the first provider with a real annual figure
 
 Each tier auto-skips when its key (or, for Forager, its account id / a LinkedIn
 handle) is missing, so the waterfall degrades gracefully: a row with no
@@ -16,6 +18,46 @@ Forager/LeadMagic, which both require a LinkedIn profile.
 import leadmagic_client
 import forager_client
 import prospeo_client
+import storeleads_client
+import config
+
+
+def _bucket_annual_revenue(dollars):
+    """Map an annual revenue (USD) to HubSpot's estimated_annual_revenue option
+    code: 0=$0-10k, 1=$10k-100k, 2=$100k-1M, 3=$1M-10M, 4=$10M+."""
+    if not dollars:
+        return ""
+    if dollars >= 10_000_000:
+        return "4"
+    if dollars >= 1_000_000:
+        return "3"
+    if dollars >= 100_000:
+        return "2"
+    if dollars >= 10_000:
+        return "1"
+    return "0"
+
+
+def find_revenue_band(domain, order=None):
+    """Company-revenue waterfall by domain. Returns
+    {"code": <estimated_annual_revenue code or "">, "dollars": <float|None>,
+    "provider": <name or "">}. Stops at the first provider returning a real
+    annual-revenue figure. Order defaults to config.REVENUE_ORDER."""
+    if not domain:
+        return {"code": "", "dollars": None, "provider": ""}
+    providers = {
+        "storeleads": storeleads_client.company_annual_revenue,
+        "leadmagic": leadmagic_client.company_revenue,
+        "prospeo": prospeo_client.enrich_company_revenue,
+    }
+    for name in (order or config.REVENUE_ORDER):
+        fn = providers.get(name)
+        if not fn:
+            continue
+        dollars = fn(domain)
+        if dollars:
+            return {"code": _bucket_annual_revenue(dollars), "dollars": dollars, "provider": name}
+    return {"code": "", "dollars": None, "provider": ""}
 
 
 def find_email(first_name, last_name, full_name, company_name, domain, linkedin_url=""):

@@ -112,3 +112,25 @@ def find_mobile(full_name, company_name, domain, linkedin_url="", email=""):
     if num and mobile_obj.get("revealed"):
         return {"mobile": num, "verified": True}
     return empty
+
+
+def enrich_company_revenue(domain):
+    """Revenue tier: returns estimated annual revenue in USD (float) for a
+    domain via /enrich-company, or None. Uses revenue_range.min (conservative;
+    the low end of Prospeo's numeric band). Tested accurate on DTC brands where
+    LeadMagic understates, so it's the reliable fallback in the waterfall."""
+    if not config.PROSPEO_KEY or not domain:
+        return None
+    try:
+        resp = requests.post(
+            "https://api.prospeo.io/enrich-company",
+            headers={"X-KEY": config.PROSPEO_KEY, "Content-Type": "application/json"},
+            json={"data": {"company_website": domain}}, timeout=60,
+        )
+    except requests.RequestException:
+        return None
+    if resp.status_code != 200:
+        return None
+    company = (resp.json() or {}).get("company") or {}
+    lo = (company.get("revenue_range") or {}).get("min")
+    return float(lo) if lo else None

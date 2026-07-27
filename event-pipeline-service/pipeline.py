@@ -179,11 +179,26 @@ def process_row(row, company_import_by_domain=None, marketing_events_by_name=Non
     # an already-assigned company (pod OR partnership owner already set) is
     # never reassigned.
     company_id = None
-    company_has_pod = False  # used by the Qualification rule below
+    company_has_pod = False   # used by the Qualification rule below
+    company_rev_code = ""     # estimated_annual_revenue band code
+    revenue_note = ""
+
+    def _revenue_for_brand():
+        # Brand-only, pod-gated: enrich revenue only when we don't already have
+        # a band and there's a domain to look up. Sets company_rev_code + note.
+        nonlocal company_rev_code, revenue_note
+        if not (config.ENRICH_REVENUE and is_brand and domain and not company_rev_code):
+            return
+        res = enrichment.find_revenue_band(domain)
+        if res["code"]:
+            company_rev_code = res["code"]
+            revenue_note = f"Revenue band {res['code']} via {res['provider']} (~${int(res['dollars']):,}/yr)"
+
     if existing_company:
         company_id = existing_company["id"]
         current_owner = (existing_company["properties"].get("sdr_owner") or "").strip()
         current_pod = (existing_company["properties"].get("pod") or "").strip()
+        company_rev_code = (existing_company["properties"].get("estimated_annual_revenue") or "").strip()
         company_has_pod = bool(current_pod)
         if is_partner:
             if not current_owner:
@@ -191,13 +206,18 @@ def process_row(row, company_import_by_domain=None, marketing_events_by_name=Non
                 hubspot_client.update_company(company_id, {"sdr_owner": owner})
             else:
                 owner = current_owner
-        elif not current_pod:
+        elif current_pod:
+            owner = current_owner  # already in a pod => already qualified, no revenue enrich
+        else:
+            # brand not yet in a pod: enrich revenue, then assign a pod
+            _revenue_for_brand()
             pod = hubspot_client.least_loaded_pod()
             owner = hubspot_client.least_loaded_owner_in_pod(pod)
-            hubspot_client.update_company(company_id, {"pod": pod, "sdr_owner": owner})
+            update = {"pod": pod, "sdr_owner": owner}
+            if company_rev_code:
+                update["estimated_annual_revenue"] = company_rev_code
+            hubspot_client.update_company(company_id, update)
             company_has_pod = True
-        else:
-            owner = current_owner
     elif company_name:
         company_import_row = company_import_by_domain.get(domain)
         props = _build_company_create_props(company_name, domain, company_import_row)
@@ -205,6 +225,10 @@ def process_row(row, company_import_by_domain=None, marketing_events_by_name=Non
             owner = hubspot_client.least_loaded_partnership_owner()
             props["sdr_owner"] = owner
         else:
+            # new brand: enrich revenue, then assign a pod
+            _revenue_for_brand()
+            if company_rev_code:
+                props["estimated_annual_revenue"] = company_rev_code
             pod = hubspot_client.least_loaded_pod()
             owner = hubspot_client.least_loaded_owner_in_pod(pod)
             props["pod"] = pod
@@ -222,9 +246,6 @@ def process_row(row, company_import_by_domain=None, marketing_events_by_name=Non
     # Qualification (marketing spec): Qualified if a Brand whose company annual
     # revenue is >= $1M (estimated_annual_revenue codes 3/4), OR the company has
     # a Pod; otherwise Disqualified (the property has no "Unqualified" option).
-    company_rev_code = ""
-    if existing_company:
-        company_rev_code = (existing_company["properties"].get("estimated_annual_revenue") or "").strip()
     qualified = (is_brand and company_rev_code in config.QUALIFIED_REVENUE_CODES) or company_has_pod
     qualification_value = "Qualified" if qualified else "Disqualified"
 
@@ -311,6 +332,8 @@ def process_row(row, company_import_by_domain=None, marketing_events_by_name=Non
         notes = f"{notes} | {marketing_event_note}".strip(" |")
     if mobile_note:
         notes = f"{notes} | {mobile_note}".strip(" |")
+    if revenue_note:
+        notes = f"{notes} | {revenue_note}".strip(" |")
     if unverified_email:
         notes = f"{notes} | Unverified email for manual review: {unverified_email}".strip(" |")
 

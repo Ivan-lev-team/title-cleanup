@@ -31,6 +31,15 @@ FORAGER_ACCOUNT_ID = os.environ.get("FORAGER_ACCOUNT_ID", "")
 # always runs; set ENRICH_MOBILE=false to skip the mobile waterfall entirely.
 ENRICH_MOBILE = os.environ.get("ENRICH_MOBILE", "true").strip().lower() == "true"
 
+# Company REVENUE enrichment (brand-only, pod-gated): for a Brand not already in
+# a pod, look up estimated annual revenue by domain and bucket it into the
+# estimated_annual_revenue codes. Waterfall order (each tier skips if its key is
+# blank): StoreLeads (ecommerce-native, most accurate) -> LeadMagic (headcount-
+# derived band, only used when >= $1M) -> Prospeo (reliable numeric band).
+STORELEADS_KEY = os.environ.get("STORELEADS_KEY", "")
+REVENUE_ORDER = [p.strip() for p in os.environ.get("REVENUE_ORDER", "storeleads,leadmagic,prospeo").split(",") if p.strip()]
+ENRICH_REVENUE = os.environ.get("ENRICH_REVENUE", "true").strip().lower() == "true"
+
 CONTACT_SHEET_NAME = os.environ.get("CONTACT_SHEET_NAME", "Contact Import")
 COMPANY_SHEET_NAME = os.environ.get("COMPANY_SHEET_NAME", "Company Import")
 POLL_INTERVAL_SECONDS = int(os.environ.get("POLL_INTERVAL_SECONDS", "300"))

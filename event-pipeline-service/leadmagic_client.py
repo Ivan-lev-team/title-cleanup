@@ -94,3 +94,31 @@ def find_mobile(profile_url, work_email=""):
     data = resp.json() if resp.content else {}
     mobile = (data.get("mobile_number") or "").strip()
     return {"mobile": mobile, "verified": bool(mobile), "raw_status": (data.get("status") or "").strip().lower()}
+
+
+import re as _re
+
+_BAND_RE = _re.compile(r"\$?([\d.]+)\s*([KMB])", _re.IGNORECASE)
+
+
+def company_revenue(domain):
+    """Revenue tier: returns estimated annual revenue in USD (float) for a
+    domain via /companies/company-search, or None. LeadMagic returns a
+    HEADCOUNT-DERIVED band in `revenue_formatted` (e.g. "$10M to <$50M"); the
+    numeric `revenue` is a band-encoding sentinel, not a real figure. We parse
+    the band's LOWER bound and only return it when it's >= $1M -- a "<$1M" or
+    absent band is treated as no-data (return None -> fall through to the next
+    provider), because LeadMagic systematically understates lean DTC brands."""
+    if not config.LEADMAGIC_KEY or not domain:
+        return None
+    resp = _post("/companies/company-search", {"company_domain": domain})
+    if resp is None or resp.status_code >= 300:
+        return None
+    fmt = ((resp.json() if resp.content else {}).get("revenue_formatted") or "").strip()
+    if not fmt or fmt.startswith("<"):  # "<$1M" == LeadMagic's low/unknown -> miss
+        return None
+    m = _BAND_RE.search(fmt)  # lower bound of the band, e.g. "$10M to <$50M" -> 10M
+    if not m:
+        return None
+    dollars = float(m.group(1)) * {"K": 1e3, "M": 1e6, "B": 1e9}[m.group(2).upper()]
+    return dollars if dollars >= 1_000_000 else None
