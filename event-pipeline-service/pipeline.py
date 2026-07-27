@@ -295,7 +295,7 @@ def process_row(row, company_import_by_domain=None):
 
     result = {
         "Pipeline Status": "Pushed",
-        "ICP Verdict": "AGENCY" if is_agency else "PASS",
+        "ICP Verdict": icp_verdict,
         "Already in HubSpot?": already_existed,
         "HubSpot Contact ID": contact_id,
         "HubSpot Company ID": company_id or "",
