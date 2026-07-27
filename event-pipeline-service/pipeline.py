@@ -88,7 +88,16 @@ def process_row(row, company_import_by_domain=None):
             "Notes": f"Excluded: {reason}",
         }
 
+    # Verdict -> funnel + Contact Type. Brand (PASS) goes to the Pod/sales
+    # rotation; Agency and Tech Partner both go to the Partnerships team.
+    is_brand = company_verdict == "PASS"
     is_agency = company_verdict == "AGENCY"
+    is_tech = company_verdict == "TECH"
+    is_partner = is_agency or is_tech
+    icp_verdict = company_verdict  # PASS / AGENCY / TECH (FAIL already returned above)
+    contact_type_value = (config.CONTACT_TYPE_AGENCY if is_agency
+                          else config.CONTACT_TYPE_TECH if is_tech
+                          else config.CONTACT_TYPE_BRAND)
 
     # ---- STEP 2: check HubSpot (dedupe) ----
     existing_contact = hubspot_client.find_contact_by_email(email) if email else None
@@ -99,7 +108,7 @@ def process_row(row, company_import_by_domain=None):
     if _is_customer(existing_contact) or _is_customer(existing_company):
         return {
             "Pipeline Status": "Skipped",
-            "ICP Verdict": "AGENCY" if is_agency else "PASS",
+            "ICP Verdict": icp_verdict,
             "Already in HubSpot?": "Yes",
             "Notes": "Skipped: existing HubSpot customer",
         }
@@ -109,7 +118,7 @@ def process_row(row, company_import_by_domain=None):
     if existing_company and hubspot_client.company_has_open_deal(existing_company["id"]):
         return {
             "Pipeline Status": "Skipped",
-            "ICP Verdict": "AGENCY" if is_agency else "PASS",
+            "ICP Verdict": icp_verdict,
             "Already in HubSpot?": "Yes",
             "Notes": "Skipped: company has an open deal",
         }
@@ -135,7 +144,7 @@ def process_row(row, company_import_by_domain=None):
             if _is_customer(existing_contact):
                 return {
                     "Pipeline Status": "Skipped",
-                    "ICP Verdict": "AGENCY" if is_agency else "PASS",
+                    "ICP Verdict": icp_verdict,
                     "Already in HubSpot?": "Yes",
                     "Notes": "Skipped: existing HubSpot customer (matched on enriched email)",
                 }
@@ -158,19 +167,21 @@ def process_row(row, company_import_by_domain=None):
             mobile_note = f"Mobile found via {mob['provider']}"
 
     # ---- STEP 4: round robin ----
-    # Agencies (AGENCY verdict) skip the normal Pod rotation entirely -- they
-    # go to the Partnerships team instead, tracked purely via sdr_owner
+    # Partners (AGENCY or TECH verdict) skip the normal Pod rotation entirely --
+    # they go to the Partnerships team instead, tracked purely via sdr_owner
     # (pod is intentionally left blank; HubSpot's "pod" enumeration has no
     # Partnerships value). Everyone else follows the existing Pod round-robin,
     # only for genuinely new companies / companies without an owner yet --
     # an already-assigned company (pod OR partnership owner already set) is
     # never reassigned.
     company_id = None
+    company_has_pod = False  # used by the Qualification rule below
     if existing_company:
         company_id = existing_company["id"]
         current_owner = (existing_company["properties"].get("sdr_owner") or "").strip()
         current_pod = (existing_company["properties"].get("pod") or "").strip()
-        if is_agency:
+        company_has_pod = bool(current_pod)
+        if is_partner:
             if not current_owner:
                 owner = hubspot_client.least_loaded_partnership_owner()
                 hubspot_client.update_company(company_id, {"sdr_owner": owner})
@@ -180,12 +191,13 @@ def process_row(row, company_import_by_domain=None):
             pod = hubspot_client.least_loaded_pod()
             owner = hubspot_client.least_loaded_owner_in_pod(pod)
             hubspot_client.update_company(company_id, {"pod": pod, "sdr_owner": owner})
+            company_has_pod = True
         else:
             owner = current_owner
     elif company_name:
         company_import_row = company_import_by_domain.get(domain)
         props = _build_company_create_props(company_name, domain, company_import_row)
-        if is_agency:
+        if is_partner:
             owner = hubspot_client.least_loaded_partnership_owner()
             props["sdr_owner"] = owner
         else:
@@ -197,10 +209,20 @@ def process_row(row, company_import_by_domain=None):
             # sdr_owner (the pod-tracking property) always reflects the
             # round-robin result.
             props["sdr_owner"] = owner
+            company_has_pod = True
         props.setdefault("hubspot_owner_id", owner)
         company_id = hubspot_client.create_company(props)
     else:
         owner = None
+
+    # Qualification (marketing spec): Qualified if a Brand whose company annual
+    # revenue is >= $1M (estimated_annual_revenue codes 3/4), OR the company has
+    # a Pod; otherwise Disqualified (the property has no "Unqualified" option).
+    company_rev_code = ""
+    if existing_company:
+        company_rev_code = (existing_company["properties"].get("estimated_annual_revenue") or "").strip()
+    qualified = (is_brand and company_rev_code in config.QUALIFIED_REVENUE_CODES) or company_has_pod
+    qualification_value = "Qualified" if qualified else "Disqualified"
 
     # ---- STEP 5: push contact ----
     if existing_contact:
@@ -219,9 +241,17 @@ def process_row(row, company_import_by_domain=None):
             props["hs_linkedin_url"] = linkedin
         if not (existing_contact["properties"].get("hs_lead_status") or "").strip():
             props["hs_lead_status"] = "NEW"
-        props["how_did_you_hear_about_us_"] = config.LEAD_SOURCE_VALUE
-        if event_name:
-            props["how_did_you_hear_about_us___drill_down"] = event_name
+        # Lead Source: gap-fill only -- never overwrite a known Lead Source
+        # (marketing spec). Parent empty => write parent + drill-down.
+        if not (existing_contact["properties"].get("how_did_you_hear_about_us_") or "").strip():
+            props["how_did_you_hear_about_us_"] = config.LEAD_SOURCE_VALUE
+            if event_name:
+                props["how_did_you_hear_about_us___drill_down"] = event_name
+        # Contact Type + Qualification: gap-fill (ensure set, don't clobber)
+        if not (existing_contact["properties"].get("contact_type") or "").strip():
+            props["contact_type"] = contact_type_value
+        if not (existing_contact["properties"].get(config.QUALIFICATION_PROPERTY) or "").strip():
+            props[config.QUALIFICATION_PROPERTY] = qualification_value
         if owner:
             props["hubspot_owner_id"] = owner
         hubspot_client.update_contact(contact_id, props)
@@ -244,6 +274,8 @@ def process_row(row, company_import_by_domain=None):
         props["how_did_you_hear_about_us_"] = config.LEAD_SOURCE_VALUE
         if event_name:
             props["how_did_you_hear_about_us___drill_down"] = event_name
+        props["contact_type"] = contact_type_value
+        props[config.QUALIFICATION_PROPERTY] = qualification_value
         if owner:
             props["hubspot_owner_id"] = owner
         contact_id = hubspot_client.create_contact(props)
@@ -253,8 +285,9 @@ def process_row(row, company_import_by_domain=None):
         hubspot_client.associate_contact_to_company(contact_id, company_id)
 
     notes = enrichment_note
-    if is_agency:
-        notes = f"{notes} | Agency -- routed to Partnerships ({company_reason})".strip(" |")
+    if is_partner:
+        kind = "Agency" if is_agency else "Tech Partner"
+        notes = f"{notes} | {kind} -- routed to Partnerships ({company_reason})".strip(" |")
     if mobile_note:
         notes = f"{notes} | {mobile_note}".strip(" |")
     if unverified_email:

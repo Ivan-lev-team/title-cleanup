@@ -68,7 +68,8 @@ def find_contact_by_email(email):
         return None
     body = {
         "filterGroups": [{"filters": [{"propertyName": "email", "operator": "EQ", "value": email}]}],
-        "properties": ["email", "jobtitle", "phone", "hs_linkedin_url", "hs_lead_status", "lifecyclestage"],
+        "properties": ["email", "jobtitle", "phone", "hs_linkedin_url", "hs_lead_status", "lifecyclestage",
+                       "how_did_you_hear_about_us_", "contact_type", "gold___ent__qualification"],
         "limit": 1,
     }
     resp = request_with_retry("POST", f"{BASE}/crm/v3/objects/contacts/search", json=body)
@@ -83,7 +84,7 @@ def find_company_by_domain(domain):
         return None
     body = {
         "filterGroups": [{"filters": [{"propertyName": "domain", "operator": "EQ", "value": domain}]}],
-        "properties": ["name", "domain", "pod", "sdr_owner", "lifecyclestage"],
+        "properties": ["name", "domain", "pod", "sdr_owner", "lifecyclestage", "estimated_annual_revenue"],
         "limit": 1,
     }
     resp = request_with_retry("POST", f"{BASE}/crm/v3/objects/companies/search", json=body)

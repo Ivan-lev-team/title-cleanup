@@ -36,6 +36,22 @@ COMPANY_SHEET_NAME = os.environ.get("COMPANY_SHEET_NAME", "Company Import")
 POLL_INTERVAL_SECONDS = int(os.environ.get("POLL_INTERVAL_SECONDS", "300"))
 LEAD_SOURCE_VALUE = os.environ.get("LEAD_SOURCE_VALUE", "Event/Tradeshow")
 
+# Marketing-team HubSpot field mapping (see the "post-event upload" requirements doc).
+# Contact Type: the ICP judge's verdict maps to one of the contact_type property's
+# existing options. Brand -> sales/Pod funnel; Agency + Tech Partner -> Partnerships.
+CONTACT_TYPE_BRAND = os.environ.get("CONTACT_TYPE_BRAND", "eCommerce Brand")
+CONTACT_TYPE_AGENCY = os.environ.get("CONTACT_TYPE_AGENCY", "Agency")
+CONTACT_TYPE_TECH = os.environ.get("CONTACT_TYPE_TECH", "Technology Provider")
+
+# Qualification (contact property gold___ent__qualification, options
+# Qualified / Disqualified / Needs Further Qualification -- there is no
+# "Unqualified", so not-qualified maps to Disqualified). A contact is Qualified
+# when its company is a Brand with estimated annual revenue >= $1M (the
+# estimated_annual_revenue codes below) OR the company already has a Pod.
+QUALIFICATION_PROPERTY = "gold___ent__qualification"
+# estimated_annual_revenue option codes that count as >= $1M: 3=$1M-$10M, 4=$10M+
+QUALIFIED_REVENUE_CODES = set(os.environ.get("QUALIFIED_REVENUE_CODES", "3,4").split(","))
+
 # When true: all HubSpot reads/searches still run live, but every
 # create/update/associate call is skipped and logged instead of executed.
 # Lets you test qualify -> dedupe -> enrich -> round-robin end to end
