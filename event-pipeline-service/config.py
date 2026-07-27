@@ -52,6 +52,15 @@ QUALIFICATION_PROPERTY = "gold___ent__qualification"
 # estimated_annual_revenue option codes that count as >= $1M: 3=$1M-$10M, 4=$10M+
 QUALIFIED_REVENUE_CODES = set(os.environ.get("QUALIFIED_REVENUE_CODES", "3,4").split(","))
 
+# Marketing Event (object 0-54) attribution: after pushing a contact, record its
+# attendance on the HubSpot Marketing Event whose name matches the row's Event
+# Name, so it shows up for marketing attribution. Requires the
+# crm.objects.marketing_events.read + .write scopes; degrades to a no-op (just a
+# note) if the scope is missing or no event matches the name.
+MARKETING_EVENT_ENABLED = os.environ.get("MARKETING_EVENT_ENABLED", "true").strip().lower() == "true"
+# subscriber state to record: REGISTERED (everyone on an uploaded list) or ATTENDED
+MARKETING_EVENT_STATE = os.environ.get("MARKETING_EVENT_STATE", "REGISTERED").strip().upper()
+
 # When true: all HubSpot reads/searches still run live, but every
 # create/update/associate call is skipped and logged instead of executed.
 # Lets you test qualify -> dedupe -> enrich -> round-robin end to end

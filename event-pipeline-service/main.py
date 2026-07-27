@@ -9,6 +9,7 @@ import traceback
 
 import config
 import sheets_client
+import hubspot_client
 import pipeline
 
 
@@ -21,12 +22,16 @@ def run_once():
     # read once per cycle, not once per row -- the Company Import tab rarely
     # changes as often as the Contact Import tab does
     company_import_by_domain = sheets_client.get_company_import_by_domain()
+    # {event_name_lower: objectId} for marketing-event attribution ({} if the
+    # marketing-events scope is missing -- pipeline degrades to a note)
+    marketing_events_by_name = (hubspot_client.list_marketing_events()
+                                if config.MARKETING_EVENT_ENABLED else {})
 
     print(f"Found {len(rows)} new row(s) to process.")
     for row_number, row_dict, header in rows:
         name = f"{row_dict.get('First Name','')} {row_dict.get('Last Name','')}".strip()
         try:
-            result = pipeline.process_row(row_dict, company_import_by_domain)
+            result = pipeline.process_row(row_dict, company_import_by_domain, marketing_events_by_name)
         except Exception as e:
             result = {"Pipeline Status": "Error", "Notes": f"{type(e).__name__}: {e}"}
             print(f"  ERROR on row {row_number} ({name}): {e}")

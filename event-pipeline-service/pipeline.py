@@ -58,13 +58,17 @@ def _build_company_create_props(company_name, domain, company_import_row):
     return props
 
 
-def process_row(row, company_import_by_domain=None):
+def process_row(row, company_import_by_domain=None, marketing_events_by_name=None):
     """row: dict from the Contact Import sheet tab (template column names).
     company_import_by_domain: {domain: row_dict} from the Company Import
     tab (see sheets_client.get_company_import_by_domain), used to enrich a
     brand-new company beyond the bare name+domain the contact row gives us.
-    Returns a dict of result columns to write back to the sheet."""
+    marketing_events_by_name: {event_name_lower: objectId} from
+    hubspot_client.list_marketing_events(), used to record marketing-event
+    attendance for attribution. Returns a dict of result columns to write back.
+    """
     company_import_by_domain = company_import_by_domain or {}
+    marketing_events_by_name = marketing_events_by_name or {}
     first_name = row.get("First Name", "").strip()
     last_name = row.get("Last Name", "").strip()
     email = row.get("Email", "").strip().lower()
@@ -284,10 +288,27 @@ def process_row(row, company_import_by_domain=None):
     if company_id:
         hubspot_client.associate_contact_to_company(contact_id, company_id)
 
+    # ---- Marketing Event attribution (object 0-54) ----
+    # Record the contact's attendance on the HubSpot Marketing Event whose name
+    # matches the row's Event Name (this drives marketing attribution). Degrades
+    # to a note when the scope is missing (empty map) or no event matches.
+    marketing_event_note = ""
+    if config.MARKETING_EVENT_ENABLED and event_name:
+        oid = marketing_events_by_name.get(event_name.strip().lower())
+        if oid:
+            hubspot_client.record_marketing_event_attendance(
+                oid, config.MARKETING_EVENT_STATE,
+                email=email, vid=("" if email else contact_id))
+            marketing_event_note = f"Marketing Event: {config.MARKETING_EVENT_STATE.title()} on '{event_name}'"
+        elif marketing_events_by_name:
+            marketing_event_note = f"No Marketing Event named '{event_name}' found"
+
     notes = enrichment_note
     if is_partner:
         kind = "Agency" if is_agency else "Tech Partner"
         notes = f"{notes} | {kind} -- routed to Partnerships ({company_reason})".strip(" |")
+    if marketing_event_note:
+        notes = f"{notes} | {marketing_event_note}".strip(" |")
     if mobile_note:
         notes = f"{notes} | {mobile_note}".strip(" |")
     if unverified_email:

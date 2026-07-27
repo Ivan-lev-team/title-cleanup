@@ -314,3 +314,60 @@ def batch_associate_default(from_type, to_type, pairs):
         )
         if resp.status_code >= 300:
             raise RuntimeError(f"batch association failed: {resp.status_code} {resp.text[:500]}")
+
+
+# ------------------------------------------------- marketing events (0-54) --
+
+def list_marketing_events():
+    """Returns {event_name_lower: objectId} for all HubSpot Marketing Events
+    (object 0-54). Returns {} on any failure (e.g. the app lacks the
+    crm.objects.marketing_events.read scope) so the pipeline degrades to a
+    no-op instead of erroring. Events created in the HubSpot UI have
+    externalEventId=null and can only be addressed by objectId, which is what
+    this returns -- keyed by name so the pipeline can match a row's Event Name."""
+    events = {}
+    after = None
+    for _ in range(50):  # pagination safety cap
+        params = {"limit": 100}
+        if after:
+            params["after"] = after
+        resp = request_with_retry("GET", f"{BASE}/marketing/v3/marketing-events", params=params)
+        if resp.status_code >= 300:
+            return events  # {} on the first page; whatever we have on later failures
+        data = resp.json()
+        for e in data.get("results", []):
+            name = (e.get("eventName") or "").strip().lower()
+            oid = e.get("objectId")
+            if name and oid:
+                events[name] = str(oid)
+        after = (data.get("paging", {}).get("next") or {}).get("after")
+        if not after:
+            break
+    return events
+
+
+def record_marketing_event_attendance(object_id, subscriber_state, email="", vid="", interaction_dt_ms=None):
+    """Record a contact's attendance/registration on a Marketing Event
+    (object 0-54) via the subscriber-state endpoints -- this is what drives
+    HubSpot's marketing-event attribution (a bare CRM association does not).
+    Prefers the email-create variant, falls back to the vid (contact id)
+    variant. No-op under DRY_RUN. Returns True on success, False if no
+    identifier was available."""
+    state = (subscriber_state or "REGISTERED").upper()
+    if interaction_dt_ms is None:
+        interaction_dt_ms = int(time.time() * 1000)
+    if email:
+        path = f"{BASE}/marketing/v3/marketing-events/{object_id}/attendance/{state}/email-create"
+        item = {"email": email, "interactionDateTime": interaction_dt_ms}
+    elif vid:
+        path = f"{BASE}/marketing/v3/marketing-events/{object_id}/attendance/{state}/create"
+        item = {"vid": int(vid) if str(vid).isdigit() else vid, "interactionDateTime": interaction_dt_ms}
+    else:
+        return False
+    if config.DRY_RUN:
+        print(f"  [DRY RUN] would record marketing-event {object_id} attendance {state} for {email or vid}")
+        return True
+    resp = request_with_retry("POST", path, json={"inputs": [item]})
+    if resp.status_code >= 300:
+        raise RuntimeError(f"marketing-event attendance failed: {resp.status_code} {resp.text[:300]}")
+    return True
