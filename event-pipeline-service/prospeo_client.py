@@ -136,6 +136,40 @@ def enrich_company_revenue(domain):
     return float(lo) if lo else None
 
 
+def enrich_company_full(domain):
+    """Full company firmographics by domain via /enrich-company (1 credit per
+    matched company). Returns a dict keyed by output column name (HubSpot-
+    pushable), or {} on miss/no key."""
+    if not config.PROSPEO_KEY or not domain:
+        return {}
+    try:
+        resp = requests.post(
+            "https://api.prospeo.io/enrich-company",
+            headers={"X-KEY": config.PROSPEO_KEY, "Content-Type": "application/json"},
+            json={"data": {"company_website": domain}}, timeout=60,
+        )
+    except requests.RequestException:
+        return {}
+    if resp.status_code != 200:
+        return {}
+    c = (resp.json() or {}).get("company") or {}
+    if not c:
+        return {}
+    loc = c.get("location") or {}
+    hq = ", ".join(x for x in [loc.get("city"), loc.get("state"), loc.get("country")] if x)
+    rr = c.get("revenue_range") or {}
+    return {
+        "Estimated Revenue (USD)": rr.get("min") or "",
+        "Revenue Range": c.get("revenue_range_printed") or "",
+        "Employee Count": c.get("employee_count") or "",
+        "Employee Range": c.get("employee_range") or "",
+        "Industry": c.get("industry") or "",
+        "HQ Location": hq,
+        "Company LinkedIn": (c.get("linkedin_url") or "").strip(),
+        "Founded": c.get("founded") or "",
+    }
+
+
 def resolve_person(email="", linkedin_url=""):
     """Identity resolution via /enrich-person (single). Email standalone OR a
     LinkedIn URL standalone are both valid inputs. Returns
