@@ -22,20 +22,17 @@ def find_linkedin(full_name, hint=""):
     Returns the first linkedin.com/in/ URL found, or "" on miss/no key/error."""
     if not config.ZENROWS_KEY or not full_name:
         return ""
-    query = f'"{full_name}" {hint} site:linkedin.com/in'.strip()
-    target = "https://www.bing.com/search?q=" + urllib.parse.quote(query)
+    query = f"{full_name} {hint} linkedin".strip()
+    # DuckDuckGo's HTML endpoint returns clean, parseable results (no JS needed)
+    # and works without a premium proxy. Result links are wrapped in a uddg=
+    # redirect param, so URL-decode the whole page before matching.
+    target = "https://html.duckduckgo.com/html/?q=" + urllib.parse.quote(query)
     try:
-        r = requests.get(
-            ZENROWS_URL,
-            params={"apikey": config.ZENROWS_KEY, "url": target,
-                    "js_render": "true", "premium_proxy": "true"},
-            timeout=70,
-        )
+        r = requests.get(ZENROWS_URL, params={"apikey": config.ZENROWS_KEY, "url": target}, timeout=70)
     except requests.RequestException:
         return ""
     if r.status_code >= 300:
         return ""
-    m = _LI_RE.search(r.text or "")
-    if not m:
-        return ""
-    return m.group(0).split("?")[0].rstrip("/")
+    text = urllib.parse.unquote(r.text or "")
+    m = _LI_RE.search(text)
+    return m.group(0).split("?")[0].rstrip("/") if m else ""
