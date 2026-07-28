@@ -19,6 +19,7 @@ import leadmagic_client
 import forager_client
 import prospeo_client
 import storeleads_client
+import zenrows_client
 import config
 
 
@@ -63,6 +64,12 @@ def resolve_identity(full_name, email, linkedin_url=""):
         pu = leadmagic_client.email_to_profile(personal_email=email)
         if pu:
             out["linkedin"] = pu
+    # 2b) ZenRows LinkedIn discovery (search-engine scrape) -- last resort when
+    # the enrichment APIs can't turn the (personal) email into a profile.
+    if full_name and not out["linkedin"]:
+        li = zenrows_client.find_linkedin(full_name)
+        if li:
+            out["linkedin"] = li
     # 3) LinkedIn URL -> company (LeadMagic first, then Prospeo) -- strongest leg
     if out["linkedin"] and not (out["company_name"] or out["domain"]):
         _merge(leadmagic_client.profile_to_company(out["linkedin"]), "leadmagic")
