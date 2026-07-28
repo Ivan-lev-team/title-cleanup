@@ -134,3 +134,45 @@ def enrich_company_revenue(domain):
     company = (resp.json() or {}).get("company") or {}
     lo = (company.get("revenue_range") or {}).get("min")
     return float(lo) if lo else None
+
+
+def resolve_person(email="", linkedin_url=""):
+    """Identity resolution via /enrich-person (single). Email standalone OR a
+    LinkedIn URL standalone are both valid inputs. Returns
+    {linkedin, company_name, domain, title}; empty dict on miss/no key/no input.
+    (Use the single endpoint, not bulk-enrich-person, whose payload needs a
+    data[] array with per-record identifiers.)"""
+    empty = {"linkedin": "", "company_name": "", "domain": "", "title": ""}
+    if not config.PROSPEO_KEY or not (email or linkedin_url):
+        return empty
+    body = {}
+    if email:
+        body["email"] = email
+    if linkedin_url:
+        body["linkedin_url"] = linkedin_url
+    try:
+        resp = requests.post(
+            "https://api.prospeo.io/enrich-person",
+            headers={"X-KEY": config.PROSPEO_KEY, "Content-Type": "application/json"},
+            json=body, timeout=60,
+        )
+    except requests.RequestException:
+        return empty
+    if resp.status_code != 200:
+        return empty
+    d = resp.json() or {}
+    if d.get("error"):
+        return empty
+    # single endpoint returns person/company at top level (defensive: also check
+    # a "response" wrapper and a bulk-style matched[] just in case)
+    root = d.get("response") if isinstance(d.get("response"), dict) else d
+    if not root.get("person") and root.get("matched"):
+        root = root["matched"][0] if root["matched"] else {}
+    person = root.get("person") or {}
+    company = root.get("company") or {}
+    return {
+        "linkedin": (person.get("linkedin_url") or "").strip(),
+        "company_name": (company.get("name") or "").strip(),
+        "domain": (company.get("domain") or company.get("website") or "").strip(),
+        "title": (person.get("current_job_title") or "").strip(),
+    }

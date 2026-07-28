@@ -16,8 +16,9 @@ import requests
 import config
 
 BASE = "https://storeleads.app/json/api/v1/all"
-# multiply the raw StoreLeads figure by this to get USD (1 if dollars, 0.01 if cents)
-_UNITS = float(config.__dict__.get("STORELEADS_UNITS", 1)) if hasattr(config, "STORELEADS_UNITS") else 1.0
+# StoreLeads returns estimated_sales in CENTS of USD (confirmed live: OLIPOP
+# estimated_sales_yearly 7,311,574,896 == ~$73M/yr). Multiply by this to get USD.
+_UNITS = 0.01
 
 
 def company_annual_revenue(domain):

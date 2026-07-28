@@ -122,3 +122,36 @@ def company_revenue(domain):
         return None
     dollars = float(m.group(1)) * {"K": 1e3, "M": 1e6, "B": 1e9}[m.group(2).upper()]
     return dollars if dollars >= 1_000_000 else None
+
+
+def email_to_profile(personal_email="", work_email=""):
+    """Reverse email -> LinkedIn profile_url via /people/b2b-profile. Returns ""
+    on miss / no key / no email. (10 credits on a hit, 0 on miss.)"""
+    if not config.LEADMAGIC_KEY or not (personal_email or work_email):
+        return ""
+    body = {}
+    if work_email:
+        body["work_email"] = work_email
+    if personal_email:
+        body["personal_email"] = personal_email
+    resp = _post("/people/b2b-profile", body)
+    if resp is None or resp.status_code >= 300:
+        return ""
+    return ((resp.json() if resp.content else {}).get("profile_url") or "").strip()
+
+
+def profile_to_company(profile_url):
+    """LinkedIn profile_url -> {company_name, domain, title} via
+    /people/profile-search. Empty dict on miss/no key. (1 credit, free on miss.)"""
+    empty = {"company_name": "", "domain": "", "title": ""}
+    if not config.LEADMAGIC_KEY or not profile_url:
+        return empty
+    resp = _post("/people/profile-search", {"profile_url": profile_url})
+    if resp is None or resp.status_code >= 300:
+        return empty
+    d = resp.json() if resp.content else {}
+    return {
+        "company_name": (d.get("company_name") or "").strip(),
+        "domain": (d.get("company_website") or "").strip(),
+        "title": (d.get("professional_title") or "").strip(),
+    }

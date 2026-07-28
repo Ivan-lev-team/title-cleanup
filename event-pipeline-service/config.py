@@ -76,6 +76,13 @@ MARKETING_EVENT_STATE = os.environ.get("MARKETING_EVENT_STATE", "REGISTERED").st
 # against real HubSpot data before ever writing to it.
 DRY_RUN = os.environ.get("DRY_RUN", "false").strip().lower() == "true"
 
+# ENRICH_ONLY mode: run qualify (ICP) + enrichment (email/mobile/revenue) + a
+# read-only HubSpot status check (already-in-HubSpot / customer / open deal),
+# then write the classified+enriched result back to the sheet -- NO routing, NO
+# push, NO HubSpot writes at all. Turns the pipeline into a pure list
+# enrichment + ICP scoring tool. Leave false for the full event pipeline.
+ENRICH_ONLY = os.environ.get("ENRICH_ONLY", "false").strip().lower() == "true"
+
 HUBSPOT_BASE = "https://api.hubapi.com"
 
 # Round-robin pods, validated against the Social Commerce Summit 2026 NYC run.

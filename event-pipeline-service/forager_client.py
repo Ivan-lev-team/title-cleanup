@@ -76,3 +76,29 @@ def find_mobile(linkedin_url):
         if num:
             return {"mobile": num, "verified": True, "raw_status": status}
     return empty
+
+
+def reverse_email(email):
+    """Email -> {linkedin, company_name, domain, title} in one call via Forager's
+    person_detail_reverse_lookup/by_email. Empty dict on miss / no key / no
+    account id. Picks the person's current role for company + domain."""
+    empty = {"linkedin": "", "company_name": "", "domain": "", "title": ""}
+    if not config.FORAGER_KEY or not config.FORAGER_ACCOUNT_ID or not email:
+        return empty
+    path = f"/api/{config.FORAGER_ACCOUNT_ID}/datastorage/person_detail_reverse_lookup/by_email/"
+    resp = _post(path, {"email": email})
+    if resp is None or resp.status_code >= 300:
+        return empty
+    d = resp.json() if resp.content else {}
+    if not isinstance(d, dict):
+        return empty
+    roles = d.get("roles") or []
+    cur = next((r for r in roles if isinstance(r, dict) and r.get("is_current")),
+               roles[0] if roles and isinstance(roles[0], dict) else {})
+    org = cur.get("organization") or {}
+    return {
+        "linkedin": ((d.get("linkedin_info") or {}).get("public_profile_url") or "").strip(),
+        "company_name": (org.get("name") or "").strip(),
+        "domain": (org.get("domain") or "").strip(),
+        "title": (cur.get("role_title") or "").strip(),
+    }

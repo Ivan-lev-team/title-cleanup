@@ -22,6 +22,55 @@ import storeleads_client
 import config
 
 
+_FREE_EMAIL_DOMAINS = {
+    "gmail.com", "googlemail.com", "yahoo.com", "yahoo.ca", "yahoo.co.uk", "ymail.com",
+    "hotmail.com", "hotmail.co.uk", "outlook.com", "live.com", "msn.com", "icloud.com",
+    "me.com", "mac.com", "aol.com", "protonmail.com", "proton.me", "gmx.com", "comcast.net",
+    "verizon.net", "att.net", "sbcglobal.net", "mail.com", "zoho.com",
+}
+
+
+def is_free_email_domain(domain):
+    return (domain or "").strip().lower() in _FREE_EMAIL_DOMAINS
+
+
+def resolve_identity(full_name, email, linkedin_url=""):
+    """For a row missing a company: resolve {linkedin, company_name, domain,
+    title, provider} from a (often personal) email + name. Waterfall:
+    Forager reverse-email -> Prospeo reverse-email (both one-shot: linkedin +
+    company), then LeadMagic email->profile, then profile->company via LeadMagic
+    or Prospeo. Returns whatever was found (may be partial: a linkedin with no
+    company for solo sellers). Each tier auto-skips when its key is missing."""
+    out = {"linkedin": linkedin_url or "", "company_name": "", "domain": "", "title": "", "provider": ""}
+
+    def _merge(r, provider):
+        for k in ("linkedin", "company_name", "domain", "title"):
+            if r.get(k) and not out[k]:
+                out[k] = r[k]
+        if (out["company_name"] or out["domain"]) and not out["provider"]:
+            out["provider"] = provider
+
+    # 1) one-shot reverse-email providers (linkedin + company together)
+    if email:
+        _merge(forager_client.reverse_email(email), "forager")
+        if out["company_name"] or out["domain"]:
+            return out
+        _merge(prospeo_client.resolve_person(email=email), "prospeo")
+        if out["company_name"] or out["domain"]:
+            return out
+    # 2) LeadMagic reverse-email -> profile_url (only gives a URL)
+    if email and not out["linkedin"]:
+        pu = leadmagic_client.email_to_profile(personal_email=email)
+        if pu:
+            out["linkedin"] = pu
+    # 3) LinkedIn URL -> company (LeadMagic first, then Prospeo) -- strongest leg
+    if out["linkedin"] and not (out["company_name"] or out["domain"]):
+        _merge(leadmagic_client.profile_to_company(out["linkedin"]), "leadmagic")
+        if not (out["company_name"] or out["domain"]):
+            _merge(prospeo_client.resolve_person(linkedin_url=out["linkedin"]), "prospeo")
+    return out
+
+
 def _bucket_annual_revenue(dollars):
     """Map an annual revenue (USD) to HubSpot's estimated_annual_revenue option
     code: 0=$0-10k, 1=$10k-100k, 2=$100k-1M, 3=$1M-10M, 4=$10M+."""
