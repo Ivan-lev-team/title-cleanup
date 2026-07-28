@@ -378,6 +378,7 @@ def enrich_row(row):
     email_domain = email.split("@", 1)[1].strip() if "@" in email else ""
     if not domain and email_domain and not enrichment.is_free_email_domain(email_domain):
         domain = email_domain
+    domain = enrichment.clean_domain(domain)
 
     # ---- 1) HubSpot checkup (free reads) ----
     existing_contact = hubspot_client.find_contact_by_email(email) if email else None

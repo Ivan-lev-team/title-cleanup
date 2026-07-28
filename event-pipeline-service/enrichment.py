@@ -15,6 +15,8 @@ handle) is missing, so the waterfall degrades gracefully: a row with no
 LinkedIn URL can still get a mobile from Prospeo (name+company), just not from
 Forager/LeadMagic, which both require a LinkedIn profile.
 """
+import re
+
 import leadmagic_client
 import forager_client
 import prospeo_client
@@ -23,11 +25,30 @@ import zenrows_client
 import config
 
 
+def clean_domain(d):
+    """Normalize a domain/URL to a bare host: strip scheme, www, and any path/
+    query, lowercased. 'https://www.iDerive.com/about' -> 'iderive.com'."""
+    d = (d or "").strip().lower()
+    d = re.sub(r"^https?://", "", d)
+    d = re.sub(r"^www\.", "", d)
+    return d.split("/")[0].split("?")[0].strip()
+
+
 _FREE_EMAIL_DOMAINS = {
-    "gmail.com", "googlemail.com", "yahoo.com", "yahoo.ca", "yahoo.co.uk", "ymail.com",
-    "hotmail.com", "hotmail.co.uk", "outlook.com", "live.com", "msn.com", "icloud.com",
-    "me.com", "mac.com", "aol.com", "protonmail.com", "proton.me", "gmx.com", "comcast.net",
-    "verizon.net", "att.net", "sbcglobal.net", "mail.com", "zoho.com",
+    # webmail
+    "gmail.com", "googlemail.com", "yahoo.com", "yahoo.ca", "yahoo.co.uk", "yahoo.com.au",
+    "ymail.com", "rocketmail.com", "hotmail.com", "hotmail.co.uk", "hotmail.ca", "outlook.com",
+    "live.com", "live.ca", "msn.com", "icloud.com", "me.com", "mac.com", "aol.com",
+    "protonmail.com", "proton.me", "gmx.com", "gmx.de", "gmx.net", "mail.com", "zoho.com",
+    "yandex.com", "hey.com", "fastmail.com", "hushmail.com",
+    # ISPs (personal, not companies)
+    "comcast.net", "verizon.net", "att.net", "sbcglobal.net", "bellsouth.net", "cox.net",
+    "charter.net", "earthlink.net", "frontier.com", "windstream.net", "roadrunner.com",
+    "bigpond.com", "bigpond.net.au", "optusnet.com.au", "iinet.net.au", "telstra.com",
+    "rogers.com", "sympatico.ca", "shaw.ca", "telus.net", "videotron.ca",
+    "btinternet.com", "sky.com", "virginmedia.com", "orange.fr", "free.fr", "wanadoo.fr",
+    "web.de", "t-online.de", "libero.it", "naver.com", "qq.com", "163.com", "126.com",
+    "rediffmail.com",
 }
 
 
@@ -75,6 +96,7 @@ def resolve_identity(full_name, email, linkedin_url=""):
         _merge(leadmagic_client.profile_to_company(out["linkedin"]), "leadmagic")
         if not (out["company_name"] or out["domain"]):
             _merge(prospeo_client.resolve_person(linkedin_url=out["linkedin"]), "prospeo")
+    out["domain"] = clean_domain(out["domain"])  # resolved domains often arrive as full URLs
     return out
 
 
