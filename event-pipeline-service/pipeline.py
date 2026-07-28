@@ -405,11 +405,26 @@ def enrich_row(row):
         existing_company = hubspot_client.get_company_for_contact(existing_contact["id"])
     hs_status = "Yes" if (existing_contact or existing_company) else "No"
 
+    # Surface what HubSpot already knows for a matched contact/company (owner,
+    # country, lifecycle, industry, ids) so the sheet carries it too. Merged
+    # into every result below; all blank when the row isn't in HubSpot.
+    _cp = existing_contact["properties"] if existing_contact else {}
+    _ecp = existing_company["properties"] if existing_company else {}
+    _owner_id = (_cp.get("hubspot_owner_id") or _ecp.get("hubspot_owner_id") or "").strip()
+    hs_extra = {
+        "HubSpot Contact ID": existing_contact["id"] if existing_contact else "",
+        "HubSpot Company ID": existing_company["id"] if existing_company else "",
+        "HubSpot Owner": hubspot_client.get_owner_name(_owner_id),
+        "HubSpot Country": (_cp.get("country") or _ecp.get("country") or "").strip(),
+        "HubSpot Lifecycle Stage": (_cp.get("lifecyclestage") or _ecp.get("lifecyclestage") or "").strip(),
+        "HubSpot Industry": (_ecp.get("industry") or "").strip(),
+    }
+
     if _is_customer(existing_contact) or _is_customer(existing_company):
-        return {"Pipeline Status": "Skipped", "Enriched?": "Yes", "Already in HubSpot?": "Yes",
+        return {**hs_extra, "Pipeline Status": "Skipped", "Enriched?": "Yes", "Already in HubSpot?": "Yes",
                 "Contact Type": input_contact_type, "Notes": "Existing HubSpot customer -- not enriched"}
     if existing_company and hubspot_client.company_has_open_deal(existing_company["id"]):
-        return {"Pipeline Status": "Skipped", "Enriched?": "Yes", "Already in HubSpot?": "Yes",
+        return {**hs_extra, "Pipeline Status": "Skipped", "Enriched?": "Yes", "Already in HubSpot?": "Yes",
                 "Contact Type": input_contact_type, "Notes": "Company has an open deal -- not enriched"}
 
     ep = (existing_company or {}).get("properties", {})
@@ -432,14 +447,14 @@ def enrich_row(row):
         else:
             resolve_note = "Unresolved -- no company from personal email"
     if not company_name and not domain:
-        return {"Pipeline Status": "Unresolved", "Enriched?": "Yes", "ICP Verdict": "",
+        return {**hs_extra, "Pipeline Status": "Unresolved", "Enriched?": "Yes", "ICP Verdict": "",
                 "Already in HubSpot?": hs_status, "Contact Type": input_contact_type,
                 "LinkedIn URL": linkedin, "Notes": resolve_note or "No company/domain -- cannot classify"}
 
     # ---- 3) ICP ----
     company_verdict, company_reason = qualify.company_icp_judge(company_name, domain)
     if company_verdict == "FAIL":
-        return {"Pipeline Status": "Rejected", "Enriched?": "Yes", "ICP Verdict": "FAIL",
+        return {**hs_extra, "Pipeline Status": "Rejected", "Enriched?": "Yes", "ICP Verdict": "FAIL",
                 "Already in HubSpot?": hs_status, "Contact Type": input_contact_type,
                 "Company Name": company_name, "Company Domain": domain, "LinkedIn URL": linkedin,
                 "Notes": f"Excluded: {company_reason}"}
@@ -522,4 +537,5 @@ def enrich_row(row):
     for k, v in firmographics.items():
         if v not in ("", None):
             result[k] = v
+    result.update(hs_extra)
     return result

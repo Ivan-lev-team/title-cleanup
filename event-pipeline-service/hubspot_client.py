@@ -69,7 +69,8 @@ def find_contact_by_email(email):
     body = {
         "filterGroups": [{"filters": [{"propertyName": "email", "operator": "EQ", "value": email}]}],
         "properties": ["email", "jobtitle", "phone", "hs_linkedin_url", "hs_lead_status", "lifecyclestage",
-                       "how_did_you_hear_about_us_", "contact_type", "gold___ent__qualification"],
+                       "how_did_you_hear_about_us_", "contact_type", "gold___ent__qualification",
+                       "hubspot_owner_id", "country"],
         "limit": 1,
     }
     resp = request_with_retry("POST", f"{BASE}/crm/v3/objects/contacts/search", json=body)
@@ -84,7 +85,8 @@ def find_company_by_domain(domain):
         return None
     body = {
         "filterGroups": [{"filters": [{"propertyName": "domain", "operator": "EQ", "value": domain}]}],
-        "properties": ["name", "domain", "pod", "sdr_owner", "lifecyclestage", "estimated_annual_revenue"],
+        "properties": ["name", "domain", "pod", "sdr_owner", "lifecyclestage", "estimated_annual_revenue",
+                       "hubspot_owner_id", "country", "industry"],
         "limit": 1,
     }
     resp = request_with_retry("POST", f"{BASE}/crm/v3/objects/companies/search", json=body)
@@ -141,11 +143,31 @@ def get_company_for_contact(contact_id):
         return None
     resp = request_with_retry(
         "GET", f"{BASE}/crm/v3/objects/companies/{cid}",
-        params={"properties": "name,domain,pod,sdr_owner,lifecyclestage,estimated_annual_revenue"},
+        params={"properties": "name,domain,pod,sdr_owner,lifecyclestage,estimated_annual_revenue,"
+                              "hubspot_owner_id,country,industry"},
     )
     if resp.status_code >= 300:
         return None
     return resp.json()
+
+
+_owner_name_cache = {}
+
+
+def get_owner_name(owner_id):
+    """Resolve a HubSpot owner id to a human name (or email), cached. '' on miss."""
+    oid = (str(owner_id) if owner_id else "").strip()
+    if not oid:
+        return ""
+    if oid in _owner_name_cache:
+        return _owner_name_cache[oid]
+    resp = request_with_retry("GET", f"{BASE}/crm/v3/owners/{oid}")
+    name = ""
+    if resp.status_code < 300:
+        d = resp.json()
+        name = (f"{d.get('firstName','')} {d.get('lastName','')}".strip() or d.get("email", "") or oid)
+    _owner_name_cache[oid] = name
+    return name
 
 
 def find_owner_id_by_email(email):
