@@ -27,6 +27,15 @@ RESULT_COLS = [
     "Qualification",
     "Estimated Annual Revenue",
     "Work Email",
+    # company firmographics (ENRICH_ONLY) -- for a HubSpot-pushable sheet
+    "Estimated Revenue (USD)",
+    "Revenue Range",
+    "Employee Count",
+    "Employee Range",
+    "Industry",
+    "HQ Location",
+    "Company LinkedIn",
+    "Founded",
     "Notes",
 ]
 

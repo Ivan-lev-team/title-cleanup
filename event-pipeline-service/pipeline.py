@@ -8,6 +8,7 @@ filtered out anyway.
 import qualify
 import hubspot_client
 import enrichment
+import prospeo_client
 import config
 
 normalize_phone = hubspot_client.normalize_phone
@@ -456,6 +457,10 @@ def enrich_row(row):
                 mobile = mb["mobile"]
                 mobile_note = f"Mobile via {mb['provider']}"
 
+    # Full company firmographics for every classified row with a domain
+    # (qualified AND disqualified) -- for a HubSpot-pushable sheet.
+    firmographics = prospeo_client.enrich_company_full(domain) if (config.ENRICH_FIRMOGRAPHICS and domain) else {}
+
     parts = []
     if resolve_note:
         parts.append(resolve_note)
@@ -490,4 +495,7 @@ def enrich_row(row):
         result["Mobile Phone Number"] = mobile
     if rev_code:
         result["Estimated Annual Revenue"] = rev_code
+    for k, v in firmographics.items():
+        if v not in ("", None):
+            result[k] = v
     return result

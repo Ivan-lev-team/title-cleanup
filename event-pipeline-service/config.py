@@ -86,6 +86,10 @@ DRY_RUN = os.environ.get("DRY_RUN", "false").strip().lower() == "true"
 # push, NO HubSpot writes at all. Turns the pipeline into a pure list
 # enrichment + ICP scoring tool. Leave false for the full event pipeline.
 ENRICH_ONLY = os.environ.get("ENRICH_ONLY", "false").strip().lower() == "true"
+# In ENRICH_ONLY, also pull full company firmographics (revenue $, employees,
+# industry, HQ, company LinkedIn, founded) for every classified row with a
+# domain -- one Prospeo enrich-company call each -- for a HubSpot-pushable sheet.
+ENRICH_FIRMOGRAPHICS = os.environ.get("ENRICH_FIRMOGRAPHICS", "true").strip().lower() == "true"
 
 HUBSPOT_BASE = "https://api.hubapi.com"
 
