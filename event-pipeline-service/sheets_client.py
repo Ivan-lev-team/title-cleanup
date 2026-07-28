@@ -18,6 +18,7 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 STATUS_COL = "Pipeline Status"
 RESULT_COLS = [
     STATUS_COL,
+    "Enriched?",
     "ICP Verdict",
     "Already in HubSpot?",
     "HubSpot Contact ID",

@@ -406,11 +406,11 @@ def enrich_row(row):
     hs_status = "Yes" if (existing_contact or existing_company) else "No"
 
     if _is_customer(existing_contact) or _is_customer(existing_company):
-        return {"Pipeline Status": "Skipped", "Already in HubSpot?": "Yes", "Contact Type": input_contact_type,
-                "Notes": "Existing HubSpot customer -- not enriched"}
+        return {"Pipeline Status": "Skipped", "Enriched?": "Yes", "Already in HubSpot?": "Yes",
+                "Contact Type": input_contact_type, "Notes": "Existing HubSpot customer -- not enriched"}
     if existing_company and hubspot_client.company_has_open_deal(existing_company["id"]):
-        return {"Pipeline Status": "Skipped", "Already in HubSpot?": "Yes", "Contact Type": input_contact_type,
-                "Notes": "Company has an open deal -- not enriched"}
+        return {"Pipeline Status": "Skipped", "Enriched?": "Yes", "Already in HubSpot?": "Yes",
+                "Contact Type": input_contact_type, "Notes": "Company has an open deal -- not enriched"}
 
     ep = (existing_company or {}).get("properties", {})
     company_name = company_name or (ep.get("name") or "").strip()
@@ -432,16 +432,16 @@ def enrich_row(row):
         else:
             resolve_note = "Unresolved -- no company from personal email"
     if not company_name and not domain:
-        return {"Pipeline Status": "Unresolved", "ICP Verdict": "", "Already in HubSpot?": hs_status,
-                "Contact Type": input_contact_type, "LinkedIn URL": linkedin,
-                "Notes": resolve_note or "No company/domain -- cannot classify"}
+        return {"Pipeline Status": "Unresolved", "Enriched?": "Yes", "ICP Verdict": "",
+                "Already in HubSpot?": hs_status, "Contact Type": input_contact_type,
+                "LinkedIn URL": linkedin, "Notes": resolve_note or "No company/domain -- cannot classify"}
 
     # ---- 3) ICP ----
     company_verdict, company_reason = qualify.company_icp_judge(company_name, domain)
     if company_verdict == "FAIL":
-        return {"Pipeline Status": "Rejected", "ICP Verdict": "FAIL", "Already in HubSpot?": hs_status,
-                "Contact Type": input_contact_type, "Company Name": company_name,
-                "Company Domain": domain, "LinkedIn URL": linkedin,
+        return {"Pipeline Status": "Rejected", "Enriched?": "Yes", "ICP Verdict": "FAIL",
+                "Already in HubSpot?": hs_status, "Contact Type": input_contact_type,
+                "Company Name": company_name, "Company Domain": domain, "LinkedIn URL": linkedin,
                 "Notes": f"Excluded: {company_reason}"}
     is_brand = company_verdict == "PASS"
     is_agency = company_verdict == "AGENCY"
@@ -500,6 +500,7 @@ def enrich_row(row):
 
     result = {
         "Pipeline Status": "Enriched",
+        "Enriched?": "Yes",
         "ICP Verdict": company_verdict,
         "Contact Type": contact_type_value,
         "Qualification": "Qualified" if qualified else "Disqualified",
