@@ -21,6 +21,22 @@ def _is_customer(record):
         return False
     return (record["properties"].get("lifecyclestage") or "").strip().lower() == "customer"
 
+
+# Map input Contact Type shorthand -> the HubSpot contact_type picklist value.
+_CONTACT_TYPE_NORMALIZE = {
+    "brand": "eCommerce Brand", "ecommerce brand": "eCommerce Brand", "e-commerce brand": "eCommerce Brand",
+    "agency": "Agency",
+    "tech": "Technology Provider", "tech partner": "Technology Provider",
+    "technology partner": "Technology Provider", "technology provider": "Technology Provider",
+}
+
+
+def _normalize_contact_type(value):
+    """Normalize an input Contact Type to the HubSpot picklist format (leaves
+    unknown values untouched)."""
+    v = (value or "").strip()
+    return _CONTACT_TYPE_NORMALIZE.get(v.lower(), v)
+
 # Company Import tab -> HubSpot company property. "Company Owner" is handled
 # separately (needs email->ID resolution), not a straight copy.
 COMPANY_FIELD_MAP = {
@@ -373,6 +389,7 @@ def enrich_row(row):
     domain = row.get("Company Domain", "").strip().lower()
     linkedin = row.get("LinkedIn URL", "").strip()
     phone = (row.get("Phone Number", "").strip() or row.get("Mobile Phone Number", "").strip())
+    input_contact_type = _normalize_contact_type(row.get("Contact Type", ""))  # normalize any input shorthand
 
     # Domain policy: explicit domain; else derive from a CORPORATE email; never
     # treat a free provider (gmail/yahoo/...) as a company domain.
@@ -389,10 +406,10 @@ def enrich_row(row):
     hs_status = "Yes" if (existing_contact or existing_company) else "No"
 
     if _is_customer(existing_contact) or _is_customer(existing_company):
-        return {"Pipeline Status": "Skipped", "Already in HubSpot?": "Yes",
+        return {"Pipeline Status": "Skipped", "Already in HubSpot?": "Yes", "Contact Type": input_contact_type,
                 "Notes": "Existing HubSpot customer -- not enriched"}
     if existing_company and hubspot_client.company_has_open_deal(existing_company["id"]):
-        return {"Pipeline Status": "Skipped", "Already in HubSpot?": "Yes",
+        return {"Pipeline Status": "Skipped", "Already in HubSpot?": "Yes", "Contact Type": input_contact_type,
                 "Notes": "Company has an open deal -- not enriched"}
 
     ep = (existing_company or {}).get("properties", {})
@@ -408,17 +425,23 @@ def enrich_row(row):
         linkedin = linkedin or res.get("linkedin", "")
         company_name = res.get("company_name", "")
         domain = res.get("domain", "")
-        resolve_note = (f"Resolved company via {res['provider']}"
-                        if (company_name or domain) else "Unresolved -- no company from personal email")
+        if company_name or domain:
+            resolve_note = f"Resolved company via {res['provider']}"
+            if res.get("low_confidence"):
+                resolve_note += " (LOW CONFIDENCE -- verify domain)"
+        else:
+            resolve_note = "Unresolved -- no company from personal email"
     if not company_name and not domain:
         return {"Pipeline Status": "Unresolved", "ICP Verdict": "", "Already in HubSpot?": hs_status,
-                "LinkedIn URL": linkedin, "Notes": resolve_note or "No company/domain -- cannot classify"}
+                "Contact Type": input_contact_type, "LinkedIn URL": linkedin,
+                "Notes": resolve_note or "No company/domain -- cannot classify"}
 
     # ---- 3) ICP ----
     company_verdict, company_reason = qualify.company_icp_judge(company_name, domain)
     if company_verdict == "FAIL":
         return {"Pipeline Status": "Rejected", "ICP Verdict": "FAIL", "Already in HubSpot?": hs_status,
-                "Company Name": company_name, "Company Domain": domain, "LinkedIn URL": linkedin,
+                "Contact Type": input_contact_type, "Company Name": company_name,
+                "Company Domain": domain, "LinkedIn URL": linkedin,
                 "Notes": f"Excluded: {company_reason}"}
     is_brand = company_verdict == "PASS"
     is_agency = company_verdict == "AGENCY"

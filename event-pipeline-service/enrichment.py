@@ -56,6 +56,18 @@ def is_free_email_domain(domain):
     return (domain or "").strip().lower() in _FREE_EMAIL_DOMAINS
 
 
+def name_domain_consistent(company_name, domain):
+    """Sanity-check a RESOLVED company against its domain: they should share a
+    stem. Catches bad resolutions like company 'Consumer Reports' + domain
+    'meta.com'. Conservative -- may flag a legit parent/brand mismatch, which we
+    surface as 'verify' rather than dropping."""
+    n = re.sub(r"[^a-z0-9]", "", (company_name or "").lower())
+    d = re.sub(r"[^a-z0-9]", "", (domain or "").split(".")[0].lower())
+    if not n or not d:
+        return False
+    return d in n or n in d or (len(d) >= 5 and d[:5] in n)
+
+
 def resolve_identity(full_name, email, linkedin_url=""):
     """For a row missing a company: resolve {linkedin, company_name, domain,
     title, provider} from a (often personal) email + name. Waterfall:
@@ -63,7 +75,8 @@ def resolve_identity(full_name, email, linkedin_url=""):
     company), then LeadMagic email->profile, then profile->company via LeadMagic
     or Prospeo. Returns whatever was found (may be partial: a linkedin with no
     company for solo sellers). Each tier auto-skips when its key is missing."""
-    out = {"linkedin": linkedin_url or "", "company_name": "", "domain": "", "title": "", "provider": ""}
+    out = {"linkedin": linkedin_url or "", "company_name": "", "domain": "", "title": "",
+           "provider": "", "low_confidence": False}
 
     def _merge(r, provider):
         for k in ("linkedin", "company_name", "domain", "title"):
@@ -97,6 +110,8 @@ def resolve_identity(full_name, email, linkedin_url=""):
         if not (out["company_name"] or out["domain"]):
             _merge(prospeo_client.resolve_person(linkedin_url=out["linkedin"]), "prospeo")
     out["domain"] = clean_domain(out["domain"])  # resolved domains often arrive as full URLs
+    if (out["company_name"] or out["domain"]) and not name_domain_consistent(out["company_name"], out["domain"]):
+        out["low_confidence"] = True  # resolved company/domain don't line up -- verify
     return out
 
 
