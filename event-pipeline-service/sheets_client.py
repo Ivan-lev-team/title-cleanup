@@ -23,18 +23,15 @@ RESULT_COLS = [
     "Already in HubSpot?",
     "HubSpot Contact ID",
     "HubSpot Company ID",
-    # ENRICH_ONLY outputs (harmless extra columns in full-pipeline mode)
+    # ENRICH_ONLY outputs (lean set; native columns like City/State/Country/
+    # Contact Owner/Lifecycle/Job Title/LinkedIn are filled in the template's own
+    # columns, not duplicated here)
     "Contact Type",
     "Qualification",
-    "Estimated Annual Revenue",
     "Work Email",
-    # company firmographics (ENRICH_ONLY) -- for a HubSpot-pushable sheet
     "Estimated Revenue (USD)",
-    "Revenue Range",
     "Employee Count",
-    "Employee Range",
     "Industry",
-    "HQ Location",
     "Company LinkedIn",
     "Founded",
     "Notes",

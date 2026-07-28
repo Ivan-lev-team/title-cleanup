@@ -160,11 +160,8 @@ def enrich_company_full(domain):
     rr = c.get("revenue_range") or {}
     return {
         "Estimated Revenue (USD)": rr.get("min") or "",
-        "Revenue Range": c.get("revenue_range_printed") or "",
         "Employee Count": c.get("employee_count") or "",
-        "Employee Range": c.get("employee_range") or "",
         "Industry": c.get("industry") or "",
-        "HQ Location": hq,
         "Company LinkedIn": (c.get("linkedin_url") or "").strip(),
         "Founded": c.get("founded") or "",
         # template-native location columns (filled from the company HQ)

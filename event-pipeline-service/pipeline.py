@@ -549,8 +549,6 @@ def enrich_row(row):
         result["Work Email"] = work_email      # kept separate -- never overwrites the row's Email
     if mobile:
         result["Mobile Phone Number"] = mobile
-    if rev_code:
-        result["Estimated Annual Revenue"] = rev_code
     for k, v in firmographics.items():
         if v not in ("", None):
             result[k] = v
