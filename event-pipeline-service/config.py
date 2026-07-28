@@ -37,6 +37,10 @@ ENRICH_MOBILE = os.environ.get("ENRICH_MOBILE", "true").strip().lower() == "true
 # blank): StoreLeads (ecommerce-native, most accurate) -> LeadMagic (headcount-
 # derived band, only used when >= $1M) -> Prospeo (reliable numeric band).
 STORELEADS_KEY = os.environ.get("STORELEADS_KEY", "")
+# ZenRows scraping API key -- powers the LinkedIn-discovery fallback in
+# resolve_identity (search-engine scrape) for personal-email rows the
+# enrichment APIs can't resolve. Tier auto-skips if blank.
+ZENROWS_KEY = os.environ.get("ZENROWS_KEY", "")
 REVENUE_ORDER = [p.strip() for p in os.environ.get("REVENUE_ORDER", "storeleads,leadmagic,prospeo").split(",") if p.strip()]
 ENRICH_REVENUE = os.environ.get("ENRICH_REVENUE", "true").strip().lower() == "true"
 
