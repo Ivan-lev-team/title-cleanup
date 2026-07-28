@@ -353,3 +353,140 @@ def process_row(row, company_import_by_domain=None, marketing_events_by_name=Non
     if enriched_mobile:
         result["Mobile Phone Number"] = enriched_mobile
     return result
+
+
+def enrich_row(row):
+    """ENRICH_ONLY flow (config.ENRICH_ONLY). Order is deliberate and strict:
+    HubSpot checkup FIRST (free reads -- dedup, customer, open deal, and the
+    company/revenue/pod HubSpot already has, including a matched contact's
+    associated company), then classify (ICP), then ENRICH LAST and strictly
+    gated -- identity resolution only when no company is known anywhere; revenue
+    only when HubSpot doesn't already have it; work email + mobile ONLY for
+    Qualified prospects. No HubSpot writes; results are written back to the sheet.
+    """
+    first_name = row.get("First Name", "").strip()
+    last_name = row.get("Last Name", "").strip()
+    full_name = f"{first_name} {last_name}".strip()
+    email = row.get("Email", "").strip().lower()
+    company_name = row.get("Company Name", "").strip()
+    domain = row.get("Company Domain", "").strip().lower()
+    linkedin = row.get("LinkedIn URL", "").strip()
+    phone = (row.get("Phone Number", "").strip() or row.get("Mobile Phone Number", "").strip())
+
+    # Domain policy: explicit domain; else derive from a CORPORATE email; never
+    # treat a free provider (gmail/yahoo/...) as a company domain.
+    email_domain = email.split("@", 1)[1].strip() if "@" in email else ""
+    if not domain and email_domain and not enrichment.is_free_email_domain(email_domain):
+        domain = email_domain
+
+    # ---- 1) HubSpot checkup (free reads) ----
+    existing_contact = hubspot_client.find_contact_by_email(email) if email else None
+    existing_company = hubspot_client.find_company_by_domain(domain) if domain else None
+    if existing_contact and not existing_company:
+        existing_company = hubspot_client.get_company_for_contact(existing_contact["id"])
+    hs_status = "Yes" if (existing_contact or existing_company) else "No"
+
+    if _is_customer(existing_contact) or _is_customer(existing_company):
+        return {"Pipeline Status": "Skipped", "Already in HubSpot?": "Yes",
+                "Notes": "Existing HubSpot customer -- not enriched"}
+    if existing_company and hubspot_client.company_has_open_deal(existing_company["id"]):
+        return {"Pipeline Status": "Skipped", "Already in HubSpot?": "Yes",
+                "Notes": "Company has an open deal -- not enriched"}
+
+    ep = (existing_company or {}).get("properties", {})
+    company_name = company_name or (ep.get("name") or "").strip()
+    domain = domain or (ep.get("domain") or "").strip().lower()
+    hs_rev_code = (ep.get("estimated_annual_revenue") or "").strip()
+    hs_pod = (ep.get("pod") or "").strip()
+
+    # ---- 2) Resolve identity ONLY if no company is known anywhere ----
+    resolve_note = ""
+    if not company_name and not domain and email:
+        res = enrichment.resolve_identity(full_name, email, linkedin)
+        linkedin = linkedin or res.get("linkedin", "")
+        company_name = res.get("company_name", "")
+        domain = res.get("domain", "")
+        resolve_note = (f"Resolved company via {res['provider']}"
+                        if (company_name or domain) else "Unresolved -- no company from personal email")
+    if not company_name and not domain:
+        return {"Pipeline Status": "Unresolved", "ICP Verdict": "", "Already in HubSpot?": hs_status,
+                "LinkedIn URL": linkedin, "Notes": resolve_note or "No company/domain -- cannot classify"}
+
+    # ---- 3) ICP ----
+    company_verdict, company_reason = qualify.company_icp_judge(company_name, domain)
+    if company_verdict == "FAIL":
+        return {"Pipeline Status": "Rejected", "ICP Verdict": "FAIL", "Already in HubSpot?": hs_status,
+                "Company Name": company_name, "Company Domain": domain, "LinkedIn URL": linkedin,
+                "Notes": f"Excluded: {company_reason}"}
+    is_brand = company_verdict == "PASS"
+    is_agency = company_verdict == "AGENCY"
+    is_tech = company_verdict == "TECH"
+    is_partner = is_agency or is_tech
+    contact_type_value = (config.CONTACT_TYPE_AGENCY if is_agency
+                          else config.CONTACT_TYPE_TECH if is_tech else config.CONTACT_TYPE_BRAND)
+
+    # ---- 4) Revenue: HubSpot first, enrich only if missing ----
+    rev_code = hs_rev_code
+    revenue_note = ""
+    if config.ENRICH_REVENUE and is_brand and domain and not rev_code and not hs_pod:
+        rr = enrichment.find_revenue_band(domain)
+        if rr["code"]:
+            rev_code = rr["code"]
+            revenue_note = f"Revenue {rr['code']} via {rr['provider']} (~${int(rr['dollars']):,}/yr)"
+
+    # ---- 5) Qualification ----
+    qualified = (is_brand and rev_code in config.QUALIFIED_REVENUE_CODES) or bool(hs_pod)
+
+    # ---- 6) Enrich contact details LAST, only for Qualified prospects ----
+    work_email = ""
+    mobile = ""
+    mobile_note = ""
+    if qualified:
+        if (not email) or enrichment.is_free_email_domain(email_domain):
+            fe = enrichment.find_email(first_name, last_name, full_name, company_name, domain, linkedin)
+            if fe["email"]:
+                work_email = fe["email"]
+            if fe["linkedin_url"] and not linkedin:
+                linkedin = fe["linkedin_url"]
+        if config.ENRICH_MOBILE and not phone:
+            mb = enrichment.find_mobile(full_name, first_name, last_name, company_name,
+                                        domain, linkedin_url=linkedin, email=work_email or email)
+            if mb["mobile"]:
+                mobile = mb["mobile"]
+                mobile_note = f"Mobile via {mb['provider']}"
+
+    parts = []
+    if resolve_note:
+        parts.append(resolve_note)
+    if is_partner:
+        parts.append(f"{'Agency' if is_agency else 'Tech Partner'} (Partnerships)")
+    if revenue_note:
+        parts.append(revenue_note)
+    if work_email:
+        parts.append("Work email found")
+    if mobile_note:
+        parts.append(mobile_note)
+    if not qualified:
+        parts.append("Not qualified -- contact enrichment skipped")
+
+    result = {
+        "Pipeline Status": "Enriched",
+        "ICP Verdict": company_verdict,
+        "Contact Type": contact_type_value,
+        "Qualification": "Qualified" if qualified else "Disqualified",
+        "Already in HubSpot?": hs_status,
+        "Notes": " | ".join(parts),
+    }
+    if company_name:
+        result["Company Name"] = company_name
+    if domain:
+        result["Company Domain"] = domain
+    if linkedin:
+        result["LinkedIn URL"] = linkedin
+    if work_email:
+        result["Work Email"] = work_email      # kept separate -- never overwrites the row's Email
+    if mobile:
+        result["Mobile Phone Number"] = mobile
+    if rev_code:
+        result["Estimated Annual Revenue"] = rev_code
+    return result

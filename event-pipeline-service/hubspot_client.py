@@ -123,6 +123,31 @@ def company_has_open_deal(company_id):
     return False
 
 
+def get_company_for_contact(contact_id):
+    """Return a matched contact's primary associated company record (same shape
+    as find_company_by_domain: {id, properties{...}}), or None. Lets the
+    enrich-only flow reuse HubSpot's existing company + revenue + pod for free
+    before spending on enrichment. Returns None on any failure."""
+    if not contact_id:
+        return None
+    resp = request_with_retry(
+        "GET", f"{BASE}/crm/v4/objects/contacts/{contact_id}/associations/companies", params={"limit": 1}
+    )
+    if resp.status_code >= 300:
+        return None
+    results = resp.json().get("results", [])
+    cid = results[0].get("toObjectId") if results else None
+    if not cid:
+        return None
+    resp = request_with_retry(
+        "GET", f"{BASE}/crm/v3/objects/companies/{cid}",
+        params={"properties": "name,domain,pod,sdr_owner,lifecyclestage,estimated_annual_revenue"},
+    )
+    if resp.status_code >= 300:
+        return None
+    return resp.json()
+
+
 def find_owner_id_by_email(email):
     """The template's 'Contact Owner' / 'Company Owner' columns are HubSpot
     user emails, not numeric IDs -- resolve here before setting hubspot_owner_id."""

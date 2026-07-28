@@ -22,6 +22,11 @@ RESULT_COLS = [
     "Already in HubSpot?",
     "HubSpot Contact ID",
     "HubSpot Company ID",
+    # ENRICH_ONLY outputs (harmless extra columns in full-pipeline mode)
+    "Contact Type",
+    "Qualification",
+    "Estimated Annual Revenue",
+    "Work Email",
     "Notes",
 ]
 

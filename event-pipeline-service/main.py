@@ -20,18 +20,21 @@ def run_once():
         return
 
     # read once per cycle, not once per row -- the Company Import tab rarely
-    # changes as often as the Contact Import tab does
-    company_import_by_domain = sheets_client.get_company_import_by_domain()
-    # {event_name_lower: objectId} for marketing-event attribution ({} if the
-    # marketing-events scope is missing -- pipeline degrades to a note)
-    marketing_events_by_name = (hubspot_client.list_marketing_events()
-                                if config.MARKETING_EVENT_ENABLED else {})
+    # changes as often as the Contact Import tab does. Both only needed for the
+    # full pipeline, not ENRICH_ONLY.
+    company_import_by_domain = {} if config.ENRICH_ONLY else sheets_client.get_company_import_by_domain()
+    marketing_events_by_name = ({} if (config.ENRICH_ONLY or not config.MARKETING_EVENT_ENABLED)
+                                else hubspot_client.list_marketing_events())
 
-    print(f"Found {len(rows)} new row(s) to process.")
+    mode = "ENRICH_ONLY" if config.ENRICH_ONLY else "full pipeline"
+    print(f"Found {len(rows)} new row(s) to process ({mode}).")
     for row_number, row_dict, header in rows:
         name = f"{row_dict.get('First Name','')} {row_dict.get('Last Name','')}".strip()
         try:
-            result = pipeline.process_row(row_dict, company_import_by_domain, marketing_events_by_name)
+            if config.ENRICH_ONLY:
+                result = pipeline.enrich_row(row_dict)
+            else:
+                result = pipeline.process_row(row_dict, company_import_by_domain, marketing_events_by_name)
         except Exception as e:
             result = {"Pipeline Status": "Error", "Notes": f"{type(e).__name__}: {e}"}
             print(f"  ERROR on row {row_number} ({name}): {e}")
