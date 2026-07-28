@@ -390,6 +390,8 @@ def enrich_row(row):
     linkedin = row.get("LinkedIn URL", "").strip()
     phone = (row.get("Phone Number", "").strip() or row.get("Mobile Phone Number", "").strip())
     input_contact_type = _normalize_contact_type(row.get("Contact Type", ""))  # normalize any input shorthand
+    input_job_title = row.get("Job Title", "").strip()
+    resolved_title = ""  # job title recovered during identity resolution
 
     # Domain policy: explicit domain; else derive from a CORPORATE email; never
     # treat a free provider (gmail/yahoo/...) as a company domain.
@@ -411,14 +413,26 @@ def enrich_row(row):
     _cp = existing_contact["properties"] if existing_contact else {}
     _ecp = existing_company["properties"] if existing_company else {}
     _owner_id = (_cp.get("hubspot_owner_id") or _ecp.get("hubspot_owner_id") or "").strip()
-    hs_extra = {
-        "HubSpot Contact ID": existing_contact["id"] if existing_contact else "",
-        "HubSpot Company ID": existing_company["id"] if existing_company else "",
-        "HubSpot Owner": hubspot_client.get_owner_name(_owner_id),
-        "HubSpot Country": (_cp.get("country") or _ecp.get("country") or "").strip(),
-        "HubSpot Lifecycle Stage": (_cp.get("lifecyclestage") or _ecp.get("lifecyclestage") or "").strip(),
-        "HubSpot Industry": (_ecp.get("industry") or "").strip(),
-    }
+    # Fill the TEMPLATE's native columns with what HubSpot already knows (only
+    # add a key when we have a value, so we never blank an existing cell). The
+    # HubSpot ids stay as their own reference columns (no native equivalent).
+    hs_extra = {}
+    if existing_contact:
+        hs_extra["HubSpot Contact ID"] = existing_contact["id"]
+    if existing_company:
+        hs_extra["HubSpot Company ID"] = existing_company["id"]
+    _owner = hubspot_client.get_owner_name(_owner_id)
+    if _owner:
+        hs_extra["Contact Owner"] = _owner
+    _country = (_cp.get("country") or _ecp.get("country") or "").strip()
+    if _country:
+        hs_extra["Country/Region"] = _country
+    _lifecycle = (_cp.get("lifecyclestage") or _ecp.get("lifecyclestage") or "").strip()
+    if _lifecycle:
+        hs_extra["Lifecycle Stage"] = _lifecycle
+    _lead_status = (_cp.get("hs_lead_status") or "").strip()
+    if _lead_status:
+        hs_extra["Lead Status"] = _lead_status
 
     if _is_customer(existing_contact) or _is_customer(existing_company):
         return {**hs_extra, "Pipeline Status": "Skipped", "Enriched?": "Yes", "Already in HubSpot?": "Yes",
@@ -440,6 +454,7 @@ def enrich_row(row):
         linkedin = linkedin or res.get("linkedin", "")
         company_name = res.get("company_name", "")
         domain = res.get("domain", "")
+        resolved_title = res.get("title", "")
         if company_name or domain:
             resolve_note = f"Resolved company via {res['provider']}"
             if res.get("low_confidence"):
@@ -528,6 +543,8 @@ def enrich_row(row):
         result["Company Domain"] = domain
     if linkedin:
         result["LinkedIn URL"] = linkedin
+    if resolved_title and not input_job_title:
+        result["Job Title"] = resolved_title
     if work_email:
         result["Work Email"] = work_email      # kept separate -- never overwrites the row's Email
     if mobile:

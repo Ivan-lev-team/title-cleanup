@@ -167,6 +167,10 @@ def enrich_company_full(domain):
         "HQ Location": hq,
         "Company LinkedIn": (c.get("linkedin_url") or "").strip(),
         "Founded": c.get("founded") or "",
+        # template-native location columns (filled from the company HQ)
+        "City": (loc.get("city") or "").strip(),
+        "State/Region": (loc.get("state") or "").strip(),
+        "Country/Region": (loc.get("country") or "").strip(),
     }
 
 
