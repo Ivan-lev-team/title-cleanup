@@ -484,7 +484,7 @@ def enrich_row(row):
     # StoreLeads + LeadMagic first, Prospeo only to fill gaps. Revenue is the MAX
     # across every source (+ any HubSpot figure) so a multi-marketplace brand
     # (Shopify + Amazon + Walmart) isn't understated by one channel's data.
-    firmo = (enrichment.find_firmographics(domain, hs_rev_code)
+    firmo = (enrichment.find_firmographics(domain, hs_rev_code, company_name)
              if (config.ENRICH_FIRMOGRAPHICS and domain)
              else {"fields": {}, "revenue_dollars": None, "revenue_code": hs_rev_code, "providers": []})
     firmographics = firmo["fields"]

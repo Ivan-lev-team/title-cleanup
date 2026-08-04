@@ -16,6 +16,9 @@ LinkedIn URL can still get a mobile from Prospeo (name+company), just not from
 Forager/LeadMagic, which both require a LinkedIn profile.
 """
 import re
+import json
+
+import anthropic
 
 import leadmagic_client
 import forager_client
@@ -23,6 +26,61 @@ import prospeo_client
 import storeleads_client
 import zenrows_client
 import config
+
+_llm = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+
+_LLM_FILL_PROMPT = """You are filling missing firmographic fields for a company, grounded ONLY in the website text provided below (plus well-established public fact). This is the LAST-RESORT gap-filler after data providers came up empty, so accuracy matters more than coverage.
+
+STRICT RULE: return a value ONLY when you are HIGHLY confident it is correct. If you are not highly confident, return null. NEVER guess or approximate. It is correct and expected to return null for most fields.
+
+Company: {company}
+Domain: {domain}
+Website text (may be truncated):
+\"\"\"
+{context}
+\"\"\"
+
+Return ONLY a JSON object with these keys (null unless highly confident):
+{{"industry": string|null, "founded_year": "YYYY"|null, "employee_count": integer|null, "revenue_usd": number|null, "company_linkedin": string|null, "city": string|null, "state": string|null, "country": string|null}}
+
+Field rules:
+- revenue_usd: ONLY if a concrete annual revenue figure is explicitly stated/derivable (very rare on a company's own site) -- otherwise null. Do NOT estimate from headcount or vibes.
+- company_linkedin: must be a real linkedin.com/company/... URL seen in the text -- else null.
+- employee_count: only a stated headcount -- else null.
+- founded_year: a 4-digit year stated on the site -- else null.
+- industry: the company's product category, only if clear from what they sell."""
+
+_LLM_COL = {
+    "industry": "Industry", "founded_year": "Founded", "employee_count": "Employee Count",
+    "revenue_usd": "Estimated Revenue (USD)", "company_linkedin": "Company LinkedIn",
+    "city": "City", "state": "State/Region", "country": "Country/Region",
+}
+
+
+def llm_fill_firmographics(company_name, domain, context, missing_cols):
+    """LAST-RESORT tier: extract ONLY the still-missing firmographic fields from
+    scraped website `context`, high-confidence only. Returns {sheet-col: value}
+    for fields in `missing_cols`. {} on no context / parse failure."""
+    if not context or not (company_name or domain):
+        return {}
+    prompt = _LLM_FILL_PROMPT.format(company=company_name or "(unknown)", domain=domain or "(unknown)", context=context[:6000])
+    try:
+        resp = _llm.messages.create(model="claude-sonnet-5", max_tokens=400,
+                                    messages=[{"role": "user", "content": prompt}])
+        text = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), "").strip()
+        if text.startswith("```"):
+            text = text.strip("`")
+            if text.lower().startswith("json"):
+                text = text[4:].strip()
+        data = json.loads(text)
+    except Exception:
+        return {}
+    out = {}
+    for k, col in _LLM_COL.items():
+        v = data.get(k)
+        if v not in (None, "", "null") and col in missing_cols:
+            out[col] = v
+    return out
 
 
 def clean_domain(d):
@@ -166,11 +224,13 @@ def _to_num(v):
 _CODE_DOLLARS = {"4": 1e7, "3": 1e6, "2": 1e5, "1": 1e4, "0": 0.0}
 
 
-def find_firmographics(domain, hs_rev_code=""):
+def find_firmographics(domain, hs_rev_code="", company_name=""):
     """Fill company firmographics from ALL providers, cost-efficiently:
     StoreLeads + LeadMagic first (both credited/cheap, and each sees channels the
-    other misses), then Prospeo ONLY to fill a field still empty. Revenue is the
-    MAX across every source (+ any HubSpot figure): a brand may sell across
+    other misses), then Prospeo ONLY to fill a field still empty, then a LAST-
+    RESORT Claude tier that scrapes the company's own site (ZenRows) and extracts
+    high-confidence values for whatever is STILL missing. Revenue is the MAX
+    across every source (+ any HubSpot figure): a brand may sell across
     Shopify + Amazon + Walmart, so no single channel's number should understate
     it and wrongly disqualify. Returns:
       {"fields": {sheet-column: value, ...},   # only non-empty
@@ -219,10 +279,36 @@ def find_firmographics(domain, hs_rev_code=""):
             state = state or pr.get("State/Region") or ""
             country = country or pr.get("Country/Region") or ""
 
-    # MAX revenue across all sources + any HubSpot figure.
+    # ---- LAST-RESORT Claude tier: fill whatever is STILL missing, grounded on
+    # the company's own website (ZenRows scrape). High-confidence values only.
+    llm_rev = None
+    still = {"Employee Count": employees, "Industry": industry, "Company LinkedIn": linkedin,
+             "Founded": founded, "City": city, "State/Region": state, "Country/Region": country}
+    missing_cols = {c for c, v in still.items() if not v}
+    prov_rev = [x for x in [_to_num(sl.get("revenue_usd")), _to_num(lm.get("revenue_usd")),
+                            _to_num(pr.get("Estimated Revenue (USD)"))] if x]
+    if not prov_rev:
+        missing_cols.add("Estimated Revenue (USD)")
+    if missing_cols:
+        context = zenrows_client.company_context(domain)
+        if context:
+            llm = llm_fill_firmographics(company_name, domain, context, missing_cols)
+            if llm:
+                providers.append("claude")
+                employees = employees or llm.get("Employee Count") or ""
+                industry = industry or llm.get("Industry") or ""
+                linkedin = linkedin or llm.get("Company LinkedIn") or ""
+                founded = founded or llm.get("Founded") or ""
+                city = city or llm.get("City") or ""
+                state = state or llm.get("State/Region") or ""
+                country = country or llm.get("Country/Region") or ""
+                llm_rev = _to_num(llm.get("Estimated Revenue (USD)"))
+
+    # MAX revenue across ALL sources (providers + HubSpot code + high-conf LLM).
     candidates = [x for x in [
         _to_num(sl.get("revenue_usd")), _to_num(lm.get("revenue_usd")),
         _to_num(pr.get("Estimated Revenue (USD)")), _CODE_DOLLARS.get((hs_rev_code or "").strip()),
+        llm_rev,
     ] if x]
     max_rev = max(candidates) if candidates else None
 
