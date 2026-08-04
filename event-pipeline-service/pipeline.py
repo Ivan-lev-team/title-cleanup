@@ -452,13 +452,19 @@ def enrich_row(row):
     if not company_name and not domain and email:
         res = enrichment.resolve_identity(full_name, email, linkedin)
         linkedin = linkedin or res.get("linkedin", "")
-        company_name = res.get("company_name", "")
-        domain = res.get("domain", "")
-        resolved_title = res.get("title", "")
-        if company_name or domain:
-            resolve_note = f"Resolved company via {res['provider']}"
+        if res.get("company_name") or res.get("domain"):
+            # DISCARD low-confidence matches instead of writing them: a resolved
+            # company name + domain that don't line up (e.g. "Consumer Reports"
+            # -> meta.com) is garbage from mismatched providers. Better to leave
+            # the row Unresolved than to stamp a wrong company/domain on it.
             if res.get("low_confidence"):
-                resolve_note += " (LOW CONFIDENCE -- verify domain)"
+                resolve_note = (f"Unresolved -- discarded low-confidence match "
+                                f"({res.get('company_name','')} / {res.get('domain','')})")
+            else:
+                company_name = res.get("company_name", "")
+                domain = res.get("domain", "")
+                resolved_title = res.get("title", "")
+                resolve_note = f"Resolved company via {res['provider']}"
         else:
             resolve_note = "Unresolved -- no company from personal email"
     if not company_name and not domain:
