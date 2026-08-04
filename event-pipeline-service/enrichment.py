@@ -153,6 +153,100 @@ def find_revenue_band(domain, order=None):
     return {"code": "", "dollars": None, "provider": ""}
 
 
+def _to_num(v):
+    """Best-effort parse of a revenue-ish value to float. Returns None if not numeric."""
+    if v in (None, ""):
+        return None
+    try:
+        return float(str(v).replace("$", "").replace(",", "").strip())
+    except (ValueError, TypeError):
+        return None
+
+
+_CODE_DOLLARS = {"4": 1e7, "3": 1e6, "2": 1e5, "1": 1e4, "0": 0.0}
+
+
+def find_firmographics(domain, hs_rev_code=""):
+    """Fill company firmographics from ALL providers, cost-efficiently:
+    StoreLeads + LeadMagic first (both credited/cheap, and each sees channels the
+    other misses), then Prospeo ONLY to fill a field still empty. Revenue is the
+    MAX across every source (+ any HubSpot figure): a brand may sell across
+    Shopify + Amazon + Walmart, so no single channel's number should understate
+    it and wrongly disqualify. Returns:
+      {"fields": {sheet-column: value, ...},   # only non-empty
+       "revenue_dollars": float|None,          # the MAX
+       "revenue_code": str,                     # bucketed MAX (or "")
+       "providers": [names that contributed]}
+    """
+    blank = {"fields": {}, "revenue_dollars": None, "revenue_code": "", "providers": []}
+    if not domain:
+        return blank
+    sl = storeleads_client.company_firmographics(domain)
+    lm = leadmagic_client.company_firmographics(domain)
+    providers = []
+    if sl:
+        providers.append("storeleads")
+    if lm:
+        providers.append("leadmagic")
+
+    def pick(*vals):
+        for v in vals:
+            if v not in (None, "", []):
+                return v
+        return ""
+
+    # Prefer LeadMagic for headcount/industry/linkedin/founded (LinkedIn-derived,
+    # cleaner); either for location. Revenue handled separately (max) below.
+    employees = pick(lm.get("employee_count"), sl.get("employee_count"))
+    industry = pick(lm.get("industry"), sl.get("industry"))
+    linkedin = pick(lm.get("linkedin_url"))
+    founded = pick(lm.get("founded_year"), sl.get("founded_year"))
+    city = pick(lm.get("city"), sl.get("city"))
+    state = pick(lm.get("state"), sl.get("state"))
+    country = pick(lm.get("country"), sl.get("country"))
+
+    # Cost-efficient Prospeo fallback: only call when a field is STILL missing.
+    pr = {}
+    if not all([employees, industry, linkedin, founded]):
+        pr = prospeo_client.enrich_company_full(domain) or {}
+        if pr:
+            providers.append("prospeo")
+            employees = employees or pr.get("Employee Count") or ""
+            industry = industry or pr.get("Industry") or ""
+            linkedin = linkedin or pr.get("Company LinkedIn") or ""
+            founded = founded or pr.get("Founded") or ""
+            city = city or pr.get("City") or ""
+            state = state or pr.get("State/Region") or ""
+            country = country or pr.get("Country/Region") or ""
+
+    # MAX revenue across all sources + any HubSpot figure.
+    candidates = [x for x in [
+        _to_num(sl.get("revenue_usd")), _to_num(lm.get("revenue_usd")),
+        _to_num(pr.get("Estimated Revenue (USD)")), _CODE_DOLLARS.get((hs_rev_code or "").strip()),
+    ] if x]
+    max_rev = max(candidates) if candidates else None
+
+    fields = {}
+    if max_rev:
+        fields["Estimated Revenue (USD)"] = int(max_rev)
+    if employees:
+        fields["Employee Count"] = employees
+    if industry:
+        fields["Industry"] = industry
+    if linkedin:
+        fields["Company LinkedIn"] = linkedin
+    if founded:
+        fields["Founded"] = founded
+    if city:
+        fields["City"] = city
+    if state:
+        fields["State/Region"] = state
+    if country:
+        fields["Country/Region"] = country
+    return {"fields": fields, "revenue_dollars": max_rev,
+            "revenue_code": _bucket_annual_revenue(max_rev) if max_rev else "", "providers": providers}
+
+
 def find_email(first_name, last_name, full_name, company_name, domain, linkedin_url=""):
     """Returns:
       {

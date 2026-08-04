@@ -124,6 +124,47 @@ def company_revenue(domain):
     return dollars if dollars >= 1_000_000 else None
 
 
+def company_firmographics(domain):
+    """Full firmographics from /companies/company-search (1 credit on hit, free
+    on miss). Returns any of: revenue_usd (band lower bound, float), employee_count,
+    industry, linkedin_url, founded_year, city, state, country. {} on miss/no key.
+    Reuses the single company-search call, so this doubles as the revenue source."""
+    if not config.LEADMAGIC_KEY or not domain:
+        return {}
+    resp = _post("/companies/company-search", {"company_domain": domain})
+    if resp is None or resp.status_code >= 300:
+        return {}
+    d = resp.json() if resp.content else {}
+    if not isinstance(d, dict) or d.get("message") == "Company not found":
+        return {}
+    out = {}
+    fmt = (d.get("revenue_formatted") or "").strip()
+    if fmt and not fmt.startswith("<"):
+        m = _BAND_RE.search(fmt)  # band lower bound, e.g. "$10M to <$50M" -> 10M
+        if m:
+            out["revenue_usd"] = float(m.group(1)) * {"K": 1e3, "M": 1e6, "B": 1e9}[m.group(2).upper()]
+    ec = d.get("employeeCount") or (d.get("employeeCountRange") or {}).get("start")
+    if ec:
+        out["employee_count"] = ec
+    if (d.get("industry") or "").strip():
+        out["industry"] = d["industry"].strip()
+    if (d.get("linkedin_url") or "").strip():
+        out["linkedin_url"] = d["linkedin_url"].strip()
+    fy = d.get("founded_year") or (d.get("foundedOn") or {}).get("year")
+    if fy:
+        out["founded_year"] = str(fy)
+    locs = d.get("locations") or []
+    if locs and isinstance(locs[0], dict):
+        l = locs[0]
+        if l.get("city"):
+            out["city"] = l["city"]
+        if l.get("geographicArea"):
+            out["state"] = l["geographicArea"]
+        if l.get("country"):
+            out["country"] = l["country"]
+    return out
+
+
 def email_to_profile(personal_email="", work_email=""):
     """Reverse email -> LinkedIn profile_url via /people/b2b-profile. Returns ""
     on miss / no key / no email. (10 credits on a hit, 0 on miss.)"""

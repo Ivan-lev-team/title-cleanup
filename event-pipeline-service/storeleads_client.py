@@ -21,11 +21,11 @@ BASE = "https://storeleads.app/json/api/v1/all"
 _UNITS = 0.01
 
 
-def company_annual_revenue(domain):
-    """Returns estimated ANNUAL revenue in USD (float), or None when no key /
-    not found / no estimate."""
+def _get_store(domain):
+    """Fetch and unwrap the StoreLeads store object for a domain. Returns the
+    store dict, or {} on miss / no key / error."""
     if not config.STORELEADS_KEY or not domain:
-        return None
+        return {}
     resp = None
     for attempt in range(4):
         try:
@@ -42,16 +42,17 @@ def company_annual_revenue(domain):
             continue
         break
     if resp is None or resp.status_code >= 300:
-        return None
+        return {}
     data = resp.json() if resp.content else {}
-    # the store object may sit at the top level or nested -- check common shapes
     store = data
     for key in ("domain", "store", "result"):
         if isinstance(data.get(key), dict):
             store = data[key]
             break
-    if not isinstance(store, dict):
-        return None
+    return store if isinstance(store, dict) else {}
+
+
+def _revenue_from_store(store):
     yearly = store.get("estimated_sales_yearly")
     monthly = store.get("estimated_sales")
     if yearly:
@@ -59,3 +60,37 @@ def company_annual_revenue(domain):
     if monthly:
         return float(monthly) * 12 * _UNITS
     return None
+
+
+def company_annual_revenue(domain):
+    """Returns estimated ANNUAL revenue in USD (float), or None when no key /
+    not found / no estimate."""
+    return _revenue_from_store(_get_store(domain))
+
+
+def company_firmographics(domain):
+    """Firmographics from StoreLeads (ecommerce-native). Returns a dict with any
+    of: revenue_usd (float), employee_count (int), industry (str), city, state,
+    country, founded_year. Empty dict on miss. Category path is trimmed to its
+    most specific leaf, e.g. '/Beauty & Fitness/.../Massage Therapy' -> that leaf."""
+    store = _get_store(domain)
+    if not store:
+        return {}
+    out = {}
+    rev = _revenue_from_store(store)
+    if rev:
+        out["revenue_usd"] = rev
+    if store.get("employee_count"):
+        out["employee_count"] = store["employee_count"]
+    cats = store.get("categories")
+    if isinstance(cats, list) and cats:
+        leaf = [seg for seg in str(cats[0]).split("/") if seg.strip()]
+        if leaf:
+            out["industry"] = leaf[-1].strip()
+    for k_out, k_in in (("city", "city"), ("state", "state"), ("country", "country_code")):
+        if store.get(k_in):
+            out[k_out] = str(store[k_in]).strip()
+    created = str(store.get("created_at") or "")[:4]
+    if created.isdigit():
+        out["founded_year"] = created  # store-creation year (weak; last-resort only)
+    return out

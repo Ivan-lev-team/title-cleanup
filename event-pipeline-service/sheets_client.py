@@ -93,11 +93,17 @@ def write_result(worksheet, row_number, header, results):
     RAW so values are stored literally -- an enriched phone like '+1 831...'
     (or a Note starting with '=', '+', '-') must never be parsed by Sheets as a
     formula, which turns the cell into '#ERROR!'."""
+    # One BATCHED write per row (not one call per column): ENRICH_ONLY fills
+    # ~15-20 columns, and per-column updates blew past Google's 60 write-
+    # requests/minute cap, 429-ing and crashing the whole poll cycle.
+    data = []
     for col_name, value in results.items():
         if col_name not in header:
             continue
         a1 = gspread.utils.rowcol_to_a1(row_number, header.index(col_name) + 1)
-        worksheet.update(range_name=a1, values=[[value]], value_input_option="RAW")
+        data.append({"range": a1, "values": [[value]]})
+    if data:
+        worksheet.batch_update(data, value_input_option="RAW")
 
 
 def get_company_import_by_domain():

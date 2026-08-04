@@ -480,17 +480,24 @@ def enrich_row(row):
     contact_type_value = (config.CONTACT_TYPE_AGENCY if is_agency
                           else config.CONTACT_TYPE_TECH if is_tech else config.CONTACT_TYPE_BRAND)
 
-    # ---- 4) Revenue: HubSpot first, enrich only if missing ----
-    rev_code = hs_rev_code
+    # ---- 4) Firmographics + revenue from ALL providers (cost-efficient) ----
+    # StoreLeads + LeadMagic first, Prospeo only to fill gaps. Revenue is the MAX
+    # across every source (+ any HubSpot figure) so a multi-marketplace brand
+    # (Shopify + Amazon + Walmart) isn't understated by one channel's data.
+    firmo = (enrichment.find_firmographics(domain, hs_rev_code)
+             if (config.ENRICH_FIRMOGRAPHICS and domain)
+             else {"fields": {}, "revenue_dollars": None, "revenue_code": hs_rev_code, "providers": []})
+    firmographics = firmo["fields"]
+    rev_code = firmo.get("revenue_code") or hs_rev_code
     revenue_note = ""
-    if config.ENRICH_REVENUE and is_brand and domain and not rev_code and not hs_pod:
-        rr = enrichment.find_revenue_band(domain)
-        if rr["code"]:
-            rev_code = rr["code"]
-            revenue_note = f"Revenue {rr['code']} via {rr['provider']} (~${int(rr['dollars']):,}/yr)"
+    if firmo.get("revenue_dollars"):
+        revenue_note = f"Revenue ~${int(firmo['revenue_dollars']):,}/yr (max across {', '.join(firmo['providers']) or 'sources'})"
 
-    # ---- 5) Qualification ----
-    qualified = (is_brand and rev_code in config.QUALIFIED_REVENUE_CODES) or bool(hs_pod)
+    # ---- 5) Qualification (lenient on revenue) ----
+    # Disqualify a Brand ONLY when revenue is CONFIDENTLY below $1M across every
+    # source. Unknown revenue -> keep it (a brand may earn on marketplaces our
+    # sources can't see). A known Pod always qualifies.
+    qualified = bool(hs_pod) or (is_brand and (rev_code == "" or rev_code in config.QUALIFIED_REVENUE_CODES))
 
     # ---- 6) Enrich contact details LAST, only for Qualified prospects ----
     work_email = ""
@@ -510,9 +517,6 @@ def enrich_row(row):
                 mobile = mb["mobile"]
                 mobile_note = f"Mobile via {mb['provider']}"
 
-    # Full company firmographics for every classified row with a domain
-    # (qualified AND disqualified) -- for a HubSpot-pushable sheet.
-    firmographics = prospeo_client.enrich_company_full(domain) if (config.ENRICH_FIRMOGRAPHICS and domain) else {}
 
     parts = []
     if resolve_note:
