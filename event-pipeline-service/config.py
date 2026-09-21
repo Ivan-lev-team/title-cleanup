@@ -41,6 +41,25 @@ STORELEADS_KEY = os.environ.get("STORELEADS_KEY", "")
 # resolve_identity (search-engine scrape) for personal-email rows the
 # enrichment APIs can't resolve. Tier auto-skips if blank.
 ZENROWS_KEY = os.environ.get("ZENROWS_KEY", "")
+
+# Seamless.ai Public API -- contact DISCOVERY (find people at a domain) plus
+# email+mobile in one research call. Unlike the other providers this one is a
+# finder of people, not just of attributes, so it sits at the head of the
+# Seamless pilot flow. Auth is a bare "Token: <key>" header.
+SEAMLESS_API_KEY = os.environ.get("SEAMLESS_API_KEY", "")
+
+# DeBounce -- standalone email verifier. The only verifier in the stack that is
+# not also a finder, so no provider grades its own homework. Policy matches
+# leadmagic_client._VERIFIED_EMAIL_STATUSES: only a DeBounce-valid address is
+# ever treated as pushable.
+DEBOUNCE_KEY = os.environ.get("DEBOUNCE_KEY", "")
+
+# Clay Public API -- contact/company DISCOVERY over HTTP. Unlike the claude.ai
+# MCP connector (company-scoped, and uncallable from a script) this is a real
+# database-wide people search, so it can front the automated waterfall.
+# Header is `clay-api-key`, not Bearer.
+CLAY_API_KEY = os.environ.get("CLAY_API_KEY", "")
+
 REVENUE_ORDER = [p.strip() for p in os.environ.get("REVENUE_ORDER", "storeleads,leadmagic,prospeo").split(",") if p.strip()]
 ENRICH_REVENUE = os.environ.get("ENRICH_REVENUE", "true").strip().lower() == "true"
 

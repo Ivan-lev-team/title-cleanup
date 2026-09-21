@@ -123,6 +123,9 @@ DISQUALIFY_PATTERNS = [
     r"\bCFO\b", r"\bR\&D\b", r"\bCTO\b",
     r"\bUX\b", r"\bIT\b", r"\bUI\b",
     r"\bHR\b", r"\bQA\b",
+    r"\bRetired\b", r"\bFormer\b", r"\bEx\-[A-Za-z]+\b", r"\bStudent\b",
+    r"\bUnemployed\b", r"\bSeeking\s+New\s+Opportunities\b", r"\bOpen\s+to\s+Work\b",
+    r"\bVolunteer\b", r"\bFreelance\b", r"\bFreelancer\b", r"\bN\/A\b", r"\bNone\b",
 ]
 
 SPECIFIC_QUALIFY_RE = re.compile("|".join(SPECIFIC_QUALIFY_PATTERNS), re.IGNORECASE)

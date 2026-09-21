@@ -3,3 +3,15 @@ venv/
 __pycache__/
 *.pyc
 *google_service_account*.json
+
+# --- secrets: .env only matched the exact name, so timestamped backups of it
+# were sitting untracked and unignored. Each holds 7 live provider keys.
+.env.*
+*.env.bak*
+
+# --- run output and caches: contact PII (emails, mobiles), 112MB of it, plus
+# the cross-run contact cache. Regenerable; never belongs in git.
+runs/
+data/
+logs/
+ambiguous_review.json

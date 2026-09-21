@@ -11,31 +11,20 @@ even checking HubSpot. Two independent checks:
     instead of a batch of parallel agents.
 """
 import json
+import time
+
 import anthropic
 
 from classify_titles import classify as _classify_title
+from icp_prompt import (
+    ICP_PROMPT_4WAY as ICP_PROMPT,
+    PHYSICAL_SYSTEM,
+    build_user_block,
+    parse_verdict,
+)
 import config
 
 _client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
-
-ICP_PROMPT = """Levanta is an affiliate/creator marketing platform. Its ICP (ideal customer profile) is: a brand that sells PHYSICAL CONSUMER PRODUCTS through Amazon, Walmart, and/or Shopify/DTC ecommerce. Levanta's customers are those brands (they buy affiliate marketing services to recruit creators/publishers to promote their products).
-
-IS a fit (should PASS): any company whose core business is MAKING or SELLING PHYSICAL PRODUCTS of any kind. This includes consumer product brands across every category (beauty, wellness/supplements, food & beverage, apparel, home goods, pet products, electronics/accessories, toys, etc.) AND business/industrial/enterprise product companies (hardware, equipment, devices, manufacturing, components, etc.) -- even small/unknown ones, and regardless of whether they sell via Amazon/Walmart/Shopify/DTC or through B2B/wholesale/enterprise channels. If the company sells a physical product, it PASSES. (Broadened per marketing: e.g. an enterprise hardware maker counts, not only DTC consumer brands.)
-
-AGENCY (verdict "AGENCY" -- Partnerships funnel, not a rejection): an agency (not a brand) whose clients are the kind of brands Levanta sells to, in one of these two categories:
-  1. Amazon/Walmart/Shopify service agency -- offers services like full account management, advertising management (DSP, Paid Social, Marketplace), or listing management, for brand clients selling on Amazon/Walmart/Shopify.
-  2. Influencer/Affiliate/Digital Marketing agency -- offers services like Amazon affiliate marketing management, influencer marketing management, DTC affiliate marketing, performance PR, TikTok Shop marketing/affiliate, or general digital marketing, for brand clients.
-  Primary fit for either category: US-based agency whose clients primarily sell in the US Amazon market. Secondary fit: European-based agency whose clients primarily sell in the US Amazon market (even if the agency's own client base is distributed internationally). These aren't Levanta's direct ICP customer, but they're valuable channel/referral partners for the Partnerships team.
-
-TECH PARTNER (verdict "TECH" -- Partnerships/technology funnel, NOT a rejection): a SaaS, software, or technology-platform company (not a brand, not an agency) that plausibly relates to ecommerce, retail, marketplaces, marketing, or commerce enablement -- e.g. ecommerce tools, marketplace/retail/ad tech, PIM/ERP/analytics, TikTok Shop or affiliate tech, or commerce platforms. Any software/tech platform that could be a technology or integration partner goes here. These go to the Partnerships team, not the sales team.
-
-NOT a fit at all (should FAIL): companies that do NOT sell a physical product and are not an agency or tech platform -- i.e. pure SERVICE businesses (dental/medical practices, salons, photography studios, handyman/home-repair services, restaurants), financial institutions/banks/insurance, law firms, management/financial consultancies, nonprofits/religious/government organizations, trade associations, event/conference organizers, staffing firms, and ISPs/telecom portals. Also FAIL: companies you cannot identify at all or that appear to be spam/junk/placeholder entries. (Note: a company that genuinely sells physical products is a PASS even if B2B/enterprise -- only route it to FAIL when it clearly sells no product and is not an agency/tech platform.)
-
-Company name: {company}
-Domain: {domain}
-
-Respond with ONLY a JSON object, no other text: {{"verdict": "PASS" or "AGENCY" or "TECH" or "FAIL", "reason": "one short sentence"}}"""
-
 
 def title_qualify(title):
     """Returns (verdict, reason). Empty title defaults to PASS, matching the
@@ -57,19 +46,81 @@ def company_icp_judge(company, domain):
         messages=[{"role": "user", "content": prompt}],
     )
     try:
-        # response may lead with a thinking block on newer models -- take the
-        # first text block rather than blindly assuming content[0] is text
-        text = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), "").strip()
-        # model may wrap the JSON in a code fence despite instructions; strip if so
-        if text.startswith("```"):
-            text = text.strip("`")
-            if text.lower().startswith("json"):
-                text = text[4:].strip()
-        data = json.loads(text)
-        verdict = data.get("verdict", "").upper()
-        reason = data.get("reason", "")
-        if verdict not in ("PASS", "AGENCY", "TECH", "FAIL"):
-            raise ValueError(f"unexpected verdict value: {verdict}")
-        return verdict, reason
+        data = parse_verdict(resp, ("PASS", "AGENCY", "TECH", "FAIL"), "PASS")
+        return data["verdict"], data.get("reason", "")
     except Exception as e:
         return "PASS", f"could not parse ICP judgment ({e}) -- defaulted to PASS, review manually"
+
+
+# ---------------------------------------------------------------------------
+# Physical-product judge -- Shopify-export runs only.
+#
+# Deliberately SEPARATE from company_icp_judge. pipeline.py:104-121 branches on
+# PASS/AGENCY/TECH and treats anything that isn't FAIL as a live lead, so
+# feeding a different verdict space through that function would push unintended
+# rows to HubSpot. This function is never called by the contact pipeline.
+# ---------------------------------------------------------------------------
+_PHYS_MODEL = "claude-sonnet-5"
+_PHYS_ALLOWED = ("PASS", "FAIL", "UNRESOLVED")
+
+
+def physical_product_judge(row, homepage_text=None, model=_PHYS_MODEL, max_retries=3):
+    """Does this company sell a physical product? Returns a dict:
+
+        {verdict, fail_reason, evidence, fulfillment, reason, error}
+
+    verdict is PASS / FAIL / UNRESOLVED. UNRESOLVED is an INTERNAL routing
+    state, never a final answer: the caller either sends the row for a homepage
+    lookup (pass 2) or applies default-to-PASS. The emitted verdict space is
+    PASS/FAIL only.
+
+    High-capture posture: on repeated API or parse failure this returns PASS,
+    not FAIL, flagged in `error` so those rows stay auditable.
+    """
+    user_block = build_user_block(row, homepage_text=homepage_text)
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            resp = _client.messages.create(
+                model=model,
+                max_tokens=500,
+                system=[{
+                    "type": "text",
+                    "text": PHYSICAL_SYSTEM,
+                    # the static block is identical for all ~98k calls; caching
+                    # it turns the per-row input cost into a cache read
+                    "cache_control": {"type": "ephemeral"},
+                }],
+                messages=[{"role": "user", "content": user_block}],
+            )
+            data = parse_verdict(resp, _PHYS_ALLOWED, "PASS")
+            verdict = data["verdict"]
+            # normalise the dependent fields rather than trusting the model
+            fail_reason = data.get("fail_reason") if verdict == "FAIL" else None
+            if verdict == "FAIL" and fail_reason not in (
+                "service_digital_signal", "unconfirmed"
+            ):
+                fail_reason = "service_digital_signal"
+            fulfillment = data.get("fulfillment") if verdict == "PASS" else None
+            if verdict == "PASS" and fulfillment not in ("1PL", "3PL", "unknown"):
+                fulfillment = "unknown"
+            return {
+                "verdict": verdict,
+                "fail_reason": fail_reason,
+                "evidence": (data.get("evidence") or "")[:400],
+                "fulfillment": fulfillment,
+                "reason": (data.get("reason") or "")[:300],
+                "error": None,
+            }
+        except Exception as e:
+            last_err = e
+            if attempt < max_retries - 1:
+                time.sleep(1.5 * (attempt + 1))
+    return {
+        "verdict": "PASS",
+        "fail_reason": None,
+        "evidence": "",
+        "fulfillment": "unknown",
+        "reason": "judge error, defaulted to PASS per high-capture policy",
+        "error": str(last_err),
+    }

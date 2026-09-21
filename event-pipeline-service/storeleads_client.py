@@ -87,9 +87,19 @@ def company_firmographics(domain):
         leaf = [seg for seg in str(cats[0]).split("/") if seg.strip()]
         if leaf:
             out["industry"] = leaf[-1].strip()
-    for k_out, k_in in (("city", "city"), ("state", "state"), ("country", "country_code")):
+    for k_out, k_in in (("city", "city"), ("country", "country_code")):
         if store.get(k_in):
             out[k_out] = str(store[k_in]).strip()
+    # NOTE: StoreLeads' "state" is the STORE's status ("Active"/"Redirects"), not a
+    # geographic region -- mapping it to state wrote "Active" into State/Region on
+    # hundreds of rows. The real region is the middle token of "location", which is
+    # formatted "City, ST, COUNTRY" (e.g. "Salt Lake City, UT, USA").
+    loc = [seg.strip() for seg in str(store.get("location") or "").split(",") if seg.strip()]
+    if len(loc) >= 3:
+        # the segment can carry a postcode ("UT 84096"); keep only the non-numeric part
+        region = " ".join(t for t in loc[-2].split() if not t.replace("-", "").isdigit())
+        if region:
+            out["state"] = region
     created = str(store.get("created_at") or "")[:4]
     if created.isdigit():
         out["founded_year"] = created  # store-creation year (weak; last-resort only)

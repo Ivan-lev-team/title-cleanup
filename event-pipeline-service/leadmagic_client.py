@@ -13,6 +13,7 @@ import time
 import requests
 
 import config
+import ratelimit
 
 BASE = "https://api.leadmagic.io/v1"
 
@@ -30,13 +31,14 @@ def _post(path, payload):
     headers = {"X-API-Key": config.LEADMAGIC_KEY, "Content-Type": "application/json"}
     resp = None
     for attempt in range(6):
+        ratelimit.LEADMAGIC.acquire()
         try:
             resp = requests.post(url, headers=headers, json=payload, timeout=30)
         except requests.RequestException:
             time.sleep(2 ** attempt)
             continue
         if resp.status_code == 429:
-            time.sleep(int(resp.headers.get("Retry-After", "2")))
+            time.sleep(ratelimit.retry_after_seconds(resp) + 1)
             continue
         if resp.status_code >= 500:
             time.sleep(2 ** attempt)
@@ -68,7 +70,7 @@ def find_email(first_name, last_name, company_name, domain):
     resp = _post("/people/email-finder", payload)
     if resp is None or resp.status_code >= 300:
         return empty
-    data = resp.json() if resp.content else {}
+    data = ratelimit.safe_json(resp)
     email = (data.get("email") or "").strip()
     status = (data.get("status") or "").strip().lower()
     return {
@@ -91,7 +93,7 @@ def find_mobile(profile_url, work_email=""):
     resp = _post("/people/mobile-finder", payload)
     if resp is None or resp.status_code >= 300:
         return empty
-    data = resp.json() if resp.content else {}
+    data = ratelimit.safe_json(resp)
     mobile = (data.get("mobile_number") or "").strip()
     return {"mobile": mobile, "verified": bool(mobile), "raw_status": (data.get("status") or "").strip().lower()}
 
@@ -196,3 +198,62 @@ def profile_to_company(profile_url):
         "domain": (d.get("company_website") or "").strip(),
         "title": (d.get("professional_title") or "").strip(),
     }
+
+
+def validate_email(email):
+    """Validate an existing address via POST /v1/email-validate.
+
+    This is a VERIFIER, not a finder -- it takes an address we already have and
+    says whether it is deliverable. Added 2026-09-18 as the second pass behind
+    DeBounce, for one specific reason:
+
+      DeBounce returns "risky" (code 4) for EVERY address on an accept-all
+      domain and cannot resolve further -- a real mailbox and a fabricated one
+      come back identical. LeadMagic can discriminate there. Verified against
+      a known-good address on a domain already proven catch-all:
+          ivan@levanta.io           -> DeBounce risky, LeadMagic "valid"
+          zzq-fake-8821@levanta.io  -> DeBounce risky, LeadMagic "invalid"
+      On resolvable domains the two agree (marc@researchanddesign.com valid/
+      valid, marc.conaway@ invalid/invalid).
+
+    So the chain is DeBounce first (independent, not also a finder), then
+    LeadMagic only on risky/unknown, where it adds information rather than a
+    second opinion on something already settled.
+
+    Costs ~0.25 credits per call. Returns the empty result when the key is
+    blank, so the tier drops out rather than raising.
+    """
+    empty = {"status": "", "raw_status": "", "verified": False, "provider": "LeadMagic",
+             "mx_provider": "", "credits": "", "error": ""}
+    if not config.LEADMAGIC_KEY:
+        out = dict(empty); out["error"] = "LEADMAGIC_KEY not set"; return out
+    email = (email or "").strip()
+    if not email:
+        return dict(empty)
+
+    resp = _post("/email-validate", {"email": email})
+    out = dict(empty)
+    if resp is None:
+        out["error"] = "connection failed after retries"; return out
+    if resp.status_code >= 300:
+        out["error"] = "http %s: %s" % (resp.status_code, resp.text[:120]); return out
+    try:
+        data = ratelimit.safe_json(resp)
+    except ValueError:
+        out["error"] = "non-json: %s" % resp.text[:120]; return out
+
+    raw = (data.get("email_status") or data.get("status") or "").strip().lower()
+    # Map LeadMagic's vocabulary onto the same three buckets debounce_client uses.
+    if raw in _VERIFIED_EMAIL_STATUSES:
+        status = "valid"
+    elif raw in ("valid_catch_all", "catch_all", "catch-all", "accept_all"):
+        status = "risky"
+    elif raw in ("unknown", ""):
+        status = "unknown"
+    else:
+        status = "invalid"
+    out.update({"status": status, "raw_status": raw,
+                "verified": status == "valid",
+                "mx_provider": str(data.get("mx_provider") or ""),
+                "credits": str(data.get("credits_consumed") or "")})
+    return out
