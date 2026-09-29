@@ -577,5 +577,23 @@ def enrich_row(row):
     for k, v in firmographics.items():
         if v not in ("", None):
             result[k] = v
+    # ---- Surface pod/owner to the sheet (read-only; assignment mirrors process_row) ----
+    # ENRICH_ONLY never writes to HubSpot, so this only reflects the existing
+    # pod/owner or the round-robin pick a live push would make -- it does not assign.
+    existing_owner = (ep.get("sdr_owner") or "").strip()
+    sheet_pod = ""
+    sheet_owner_id = ""
+    if is_partner:
+        sheet_owner_id = existing_owner or hubspot_client.least_loaded_partnership_owner()
+    elif hs_pod:
+        sheet_pod = hs_pod
+        sheet_owner_id = existing_owner
+    elif qualified and is_brand:
+        sheet_pod = hubspot_client.least_loaded_pod()
+        sheet_owner_id = hubspot_client.least_loaded_owner_in_pod(sheet_pod)
+    if sheet_pod:
+        result["POD"] = sheet_pod
+    if sheet_owner_id:
+        result["SDR Owner"] = hubspot_client.get_owner_name(sheet_owner_id) or sheet_owner_id
     result.update(hs_extra)
     return result
