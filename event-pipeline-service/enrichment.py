@@ -114,6 +114,76 @@ def is_free_email_domain(domain):
     return (domain or "").strip().lower() in _FREE_EMAIL_DOMAINS
 
 
+# Marketplaces, social platforms and site builders. A seller's Amazon/Walmart/
+# Etsy storefront or Instagram handle is NOT their company domain: writing one
+# here makes the row inherit the PLATFORM's firmographics ($1B-$10B revenue,
+# tens of thousands of employees) and poisons every downstream lookup. Per the
+# playbook these belong in `amazon_storefront_url`, never in `domain`.
+_MARKETPLACE_DOMAINS = {
+    "amazon.com", "amazon.co.uk", "amazon.ca", "amazon.de", "amazon.fr", "amazon.it",
+    "amazon.es", "amazon.com.au", "amazon.co.jp", "amazon.in", "amazon.com.mx",
+    "amazon.com.br", "amzn.to", "amazon.com services llc",
+    "walmart.com", "target.com", "ebay.com", "etsy.com", "faire.com",
+    "aliexpress.com", "alibaba.com", "temu.com", "wayfair.com", "chewy.com",
+    "instagram.com", "facebook.com", "tiktok.com", "linkedin.com", "youtube.com",
+    "pinterest.com", "twitter.com", "x.com", "snapchat.com", "threads.net",
+    "shopify.com", "wix.com", "squarespace.com", "bigcommerce.com", "wordpress.com",
+    "godaddy.com", "linktr.ee", "beacons.ai", "shopmy.us", "ltk.com",
+}
+
+# Values upstream tools write when they could not find a domain. Clay in
+# particular fills its Company Domain column with the COMPANY NAME (or a
+# literal "unknown") on a failed lookup, which then reaches us as a domain.
+_DOMAIN_PLACEHOLDERS = {
+    "", "-", ".", "n/a", "na", "none", "null", "nil", "unknown", "tbd", "tba",
+    "not found", "no domain", "no website", "not available", "undefined", "false",
+}
+
+# A syntactically real hostname: labels of alphanumerics/hyphens, a TLD of 2+
+# letters, no spaces, no commas, total length within DNS limits.
+_DOMAIN_RE = re.compile(
+    r"^(?=.{4,253}$)"
+    r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
+    r"[a-z]{2,24}$"
+)
+
+
+def domain_rejection_reason(domain):
+    """Why `domain` is not usable as a company domain, or "" when it is fine.
+
+    Guards the single most damaging input error we see: a company NAME, a free
+    webmail host, or a marketplace/social URL sitting in a domain field. Each
+    of those silently breaks the email and firmographic waterfalls (every
+    provider lookup is keyed on domain) or, worse, succeeds against the wrong
+    company. Callers should drop the value and fall back to a company-name
+    lookup rather than enrich against it."""
+    d = clean_domain(domain)
+    if d in _DOMAIN_PLACEHOLDERS:
+        return "placeholder" if d else ""
+    if not _DOMAIN_RE.match(d):
+        return "not a domain"
+    if is_free_email_domain(d):
+        return "free email provider"
+    if d in _MARKETPLACE_DOMAINS:
+        return "marketplace/social platform"
+    return ""
+
+
+def valid_company_domain(domain):
+    """True when `domain` is a usable corporate domain. See
+    domain_rejection_reason for what gets rejected and why."""
+    d = clean_domain(domain)
+    return bool(d) and not domain_rejection_reason(d)
+
+
+def sanitize_company_domain(domain):
+    """(clean_domain, reason). `reason` is "" when the domain is kept; when it
+    is set the domain comes back "" so the caller never enriches against it."""
+    d = clean_domain(domain)
+    reason = domain_rejection_reason(d)
+    return ("", reason) if reason else (d, "")
+
+
 def name_domain_consistent(company_name, domain):
     """Sanity-check a RESOLVED company against its domain: they should share a
     stem. Catches bad resolutions like company 'Consumer Reports' + domain
@@ -167,7 +237,15 @@ def resolve_identity(full_name, email, linkedin_url=""):
         _merge(leadmagic_client.profile_to_company(out["linkedin"]), "leadmagic")
         if not (out["company_name"] or out["domain"]):
             _merge(prospeo_client.resolve_person(linkedin_url=out["linkedin"]), "prospeo")
-    out["domain"] = clean_domain(out["domain"])  # resolved domains often arrive as full URLs
+    # Resolved domains often arrive as full URLs. They are also where the
+    # creator/personal-email false positives surface: a solo seller's profile
+    # resolves to instagram.com or etsy.com, and the row then inherits the
+    # platform's firmographics. Reject those the same way as an input domain.
+    _resolved, _reject = sanitize_company_domain(out["domain"])
+    if _reject:
+        out["domain_rejected"] = f"{clean_domain(out['domain'])} ({_reject})"
+        out["low_confidence"] = True
+    out["domain"] = _resolved
     if (out["company_name"] or out["domain"]) and not name_domain_consistent(out["company_name"], out["domain"]):
         out["low_confidence"] = True  # resolved company/domain don't line up -- verify
     return out

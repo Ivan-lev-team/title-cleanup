@@ -395,10 +395,21 @@ def enrich_row(row):
 
     # Domain policy: explicit domain; else derive from a CORPORATE email; never
     # treat a free provider (gmail/yahoo/...) as a company domain.
+    #
+    # The supplied domain is validated BEFORE it is trusted. Upstream tools
+    # (Clay especially) write a company NAME, "unknown", a webmail host or a
+    # marketplace storefront into their domain column on a failed lookup. Any
+    # of those either breaks every provider call (all keyed on domain) or
+    # resolves to the wrong company -- the Instagram/Etsy false positives that
+    # inherit a $1B platform's firmographics. Drop it and let the normal
+    # fallbacks (corporate email domain, then company-name lookup) run.
+    domain, domain_reject = enrichment.sanitize_company_domain(domain)
+    domain_note = ""
+    if domain_reject:
+        domain_note = f"Input domain discarded ({domain_reject})"
     email_domain = email.split("@", 1)[1].strip() if "@" in email else ""
-    if not domain and email_domain and not enrichment.is_free_email_domain(email_domain):
-        domain = email_domain
-    domain = enrichment.clean_domain(domain)
+    if not domain and email_domain and enrichment.valid_company_domain(email_domain):
+        domain = enrichment.clean_domain(email_domain)
 
     # ---- 1) HubSpot checkup (free reads) ----
     existing_contact = hubspot_client.find_contact_by_email(email) if email else None
@@ -443,7 +454,9 @@ def enrich_row(row):
 
     ep = (existing_company or {}).get("properties", {})
     company_name = company_name or (ep.get("name") or "").strip()
-    domain = domain or (ep.get("domain") or "").strip().lower()
+    if not domain:
+        # HubSpot's own domain field is not immune to the same junk.
+        domain = enrichment.sanitize_company_domain(ep.get("domain") or "")[0]
     hs_rev_code = (ep.get("estimated_annual_revenue") or "").strip()
     hs_pod = (ep.get("pod") or "").strip()
 
@@ -537,6 +550,8 @@ def enrich_row(row):
         parts.append(mobile_note)
     if not qualified:
         parts.append("Not qualified -- contact enrichment skipped")
+    if domain_note:
+        parts.append(domain_note)
 
     result = {
         "Pipeline Status": "Enriched",
