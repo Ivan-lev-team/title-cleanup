@@ -68,6 +68,34 @@ COMPANY_SHEET_NAME = os.environ.get("COMPANY_SHEET_NAME", "Company Import")
 # Rows routed to the Partnership pair are mirrored onto this tab, which is the
 # Partnerships team's working list. Set PARTNERSHIP_SHEET_NAME="" to disable.
 PARTNERSHIP_SHEET_NAME = os.environ.get("PARTNERSHIP_SHEET_NAME", "Agencies/Tech")
+
+# --- Event list push (HubSpot dynamic list 7887, "Event List SDR's USE ONLY") ---
+# 7887 is DYNAMIC, so contacts cannot be added to it. A contact joins by
+# satisfying its filter, which reads how_did_you_hear_about_us___drill_down and
+# gold___ent__qualification. This path therefore writes those two properties
+# and lets the list's own exclusions (customer, opt-out, late-stage deal) apply.
+#
+# Deliberately NOT gated on DRY_RUN: it is a separate, narrower decision to let
+# this one step write to HubSpot while the rest of the pipeline stays dry.
+EVENT_LIST_PUSH = os.environ.get("EVENT_LIST_PUSH", "false").strip().lower() == "true"
+EVENT_LIST_ID = os.environ.get("EVENT_LIST_ID", "7887")
+
+# Sheet "Event Name" -> the drill-down property's option. The property has 418
+# options and the sheet's spelling often differs ("Q3Y26" vs "Q326"), so the
+# mapping is explicit: a value that is not a real option is silently dropped by
+# HubSpot, which would look like the push working while nothing joins the list.
+EVENT_NAME_TO_HUBSPOT = {
+    "Q3Y26 Amazon Accelerate": "Q326 Amazon Accelerate",
+    "Ecom Elevated Golf 2026": "Q326 Ecomm Golf Invitational",
+    "Mirakl 2026": "Mirakl 2026",
+    "Pattern Accelerate 26": "Pattern Accelerate 26",
+    "Q326 Walmart Marketplace Seller Summit": "Q326 Walmart Marketplace Seller Summit",
+    "Q226 AO2 x Walmart x Intentwise Webinar": "AO2 x Intentwise Webinar June 2026",
+    "Webinar | Webgility April 2026": "Webgibility Webinar April 2026",
+    "Q226 Netpeak Webinar - June": "NetPeak",
+    "GROW NY 2026": "Q326 GrowNY",
+    "Super Zoo": "Super Zoo 2026",
+}
 POLL_INTERVAL_SECONDS = int(os.environ.get("POLL_INTERVAL_SECONDS", "300"))
 LEAD_SOURCE_VALUE = os.environ.get("LEAD_SOURCE_VALUE", "Event/Tradeshow")
 

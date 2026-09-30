@@ -8,6 +8,7 @@ import time
 import traceback
 
 import config
+import enrichment
 import sheets_client
 import hubspot_client
 import pipeline
@@ -53,6 +54,26 @@ def run_once():
         # of the cycle (see append_partnership_rows).
         if (result.get("SDR Owner") or "").strip() in partnership_names:
             to_mirror.append({**row_dict, **result})
+
+        # Event list push: a lead with a real email and domain belongs in the
+        # SDR event list. 7887 is dynamic, so this writes the properties its
+        # filter reads rather than adding a membership. Gated by
+        # EVENT_LIST_PUSH and deliberately independent of DRY_RUN.
+        if config.EVENT_LIST_PUSH:
+            merged = {**row_dict, **result}
+            email = (merged.get("Email") or "").strip().lower()
+            domain = (merged.get("Company Domain") or "").strip()
+            event = config.EVENT_NAME_TO_HUBSPOT.get((merged.get("Event Name") or "").strip())
+            qualified = (merged.get("Qualification") or "").strip() in ("Qualified", "PASS")
+            if "@" in email and enrichment.valid_company_domain(domain) and event and qualified:
+                try:
+                    outcome = hubspot_client.push_to_event_list(
+                        email, event,
+                        merged.get("First Name", ""), merged.get("Last Name", ""),
+                        merged.get("Job Title", ""))
+                    print(f"    event list ({email}): {outcome}")
+                except Exception as e:
+                    print(f"    event list ({email}) FAILED: {type(e).__name__}: {e}")
 
     if to_mirror:
         added = sheets_client.append_partnership_rows(to_mirror)

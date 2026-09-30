@@ -19,6 +19,7 @@ Two things layered on top of that proven logic for this service:
   2. Round-robin is live-balanced off current HubSpot company counts per
      Pod, not a fixed cycle position -- no local state to lose or desync.
 """
+import re
 import time
 import requests
 
@@ -418,3 +419,46 @@ def record_marketing_event_attendance(object_id, subscriber_state, email="", vid
     if resp.status_code >= 300:
         raise RuntimeError(f"marketing-event attendance failed: {resp.status_code} {resp.text[:300]}")
     return True
+
+
+def push_to_event_list(email, event_option, first_name="", last_name="", job_title=""):
+    """Set the properties that make a contact qualify for the event list.
+
+    List 7887 is DYNAMIC: there is no membership to add, so "pushing" a lead
+    means writing how_did_you_hear_about_us___drill_down and
+    gold___ent__qualification and letting the list re-evaluate. The list's own
+    filter already excludes customers, opt-outs and late-stage deals, so this
+    does not re-implement those checks -- with one exception: an existing
+    customer is left alone entirely, per the playbook's skip rule, rather than
+    having their drill-down overwritten by an event they merely attended.
+
+    Returns "updated", "created", "skipped: customer" or "skipped: <reason>".
+    """
+    if not email or not event_option:
+        return "skipped: missing email or event"
+    props = {
+        "how_did_you_hear_about_us___drill_down": event_option,
+        "gold___ent__qualification": "Qualified",
+    }
+    existing = find_contact_by_email(email)
+    if existing:
+        if (existing.get("properties", {}).get("lifecyclestage") or "") == "customer":
+            return "skipped: customer"
+        r = request_with_retry("PATCH", f"{BASE}/crm/v3/objects/contacts/{existing['id']}",
+                               json={"properties": props})
+        return "updated" if r.status_code < 300 else f"skipped: HTTP {r.status_code}"
+    props.update({"email": email, "firstname": first_name, "lastname": last_name})
+    if job_title:
+        props["jobtitle"] = job_title
+    r = request_with_retry("POST", f"{BASE}/crm/v3/objects/contacts",
+                          json={"properties": props})
+    if r.status_code < 300:
+        return "created"
+    if r.status_code == 409:
+        # Batch/single create both 409 on a duplicate; the id is in the message.
+        m = re.search(r"Existing ID:\s*(\d+)", r.text)
+        if m:
+            request_with_retry("PATCH", f"{BASE}/crm/v3/objects/contacts/{m.group(1)}",
+                               json={"properties": props})
+            return "updated"
+    return f"skipped: HTTP {r.status_code}"
