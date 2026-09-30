@@ -106,6 +106,44 @@ def write_result(worksheet, row_number, header, results):
         worksheet.batch_update(data, value_input_option="RAW")
 
 
+def _row_key(d):
+    """Identity for de-duping a row across tabs: email first, falling back to
+    name + domain for the ~1/3 of event rows that arrive with no email."""
+    get = lambda k: (d.get(k) or "").strip().lower()
+    return "|".join([get("Email"), get("First Name"), get("Last Name"), get("Company Domain")])
+
+
+def append_partnership_rows(merged_rows):
+    """Mirror rows routed to the Partnership pair onto the Agencies/Tech tab.
+
+    That tab is the Partnerships team's working list, so an agency/tech lead
+    assigned to Katerina or Milosh has to show up there without anyone copying
+    it across by hand. Called once per poll cycle rather than per row: it reads
+    the whole tab to de-dupe, and doing that per row would burn the Sheets read
+    quota on a large batch. Rows already present (same email, or same name +
+    domain when there is no email) are skipped, so re-running is safe."""
+    if not merged_rows or not config.PARTNERSHIP_SHEET_NAME:
+        return 0
+    ws = _gc.open_by_key(config.GOOGLE_SHEET_ID).worksheet(config.PARTNERSHIP_SHEET_NAME)
+    values = ws.get_all_values()
+    if not values:
+        return 0
+    header = values[0]
+    seen = {_row_key(dict(zip(header, r))) for r in values[1:] if any(x.strip() for x in r)}
+    out = []
+    for m in merged_rows:
+        key = _row_key(m)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append([str(m.get(c, "")) for c in header])
+    if out:
+        # RAW for the same reason write_result uses it: a phone or a Note
+        # starting with '=' must not be parsed as a formula.
+        ws.append_rows(out, value_input_option="RAW", table_range="A1")
+    return len(out)
+
+
 def get_company_import_by_domain():
     """Reads the whole Company Import tab once per poll cycle and returns
     {domain_lower: row_dict}, so pipeline.py can enrich a brand-new company

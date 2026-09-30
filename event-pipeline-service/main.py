@@ -28,6 +28,10 @@ def run_once():
 
     mode = "ENRICH_ONLY" if config.ENRICH_ONLY else "full pipeline"
     print(f"Found {len(rows)} new row(s) to process ({mode}).")
+    # Names, not ids: the sheet's SDR Owner column holds display names.
+    partnership_names = {hubspot_client.get_owner_name(o) for o in config.PARTNERSHIP_OWNERS}
+    partnership_names.discard("")
+    to_mirror = []
     for row_number, row_dict, header in rows:
         name = f"{row_dict.get('First Name','')} {row_dict.get('Last Name','')}".strip()
         try:
@@ -44,6 +48,16 @@ def run_once():
         if config.DRY_RUN and result.get("Pipeline Status") == "Pushed":
             result["Pipeline Status"] = "DRY RUN - would push"
         sheets_client.write_result(ws, row_number, header, result)
+        # Anything routed to Katerina or Milosh is Partnerships' to work, so
+        # mirror it onto their tab. Collected here and appended once at the end
+        # of the cycle (see append_partnership_rows).
+        if (result.get("SDR Owner") or "").strip() in partnership_names:
+            to_mirror.append({**row_dict, **result})
+
+    if to_mirror:
+        added = sheets_client.append_partnership_rows(to_mirror)
+        print(f"  Mirrored {added} row(s) to {config.PARTNERSHIP_SHEET_NAME} "
+              f"({len(to_mirror) - added} already there).")
 
 
 def main():

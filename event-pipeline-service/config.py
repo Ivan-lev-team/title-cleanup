@@ -65,6 +65,9 @@ ENRICH_REVENUE = os.environ.get("ENRICH_REVENUE", "true").strip().lower() == "tr
 
 CONTACT_SHEET_NAME = os.environ.get("CONTACT_SHEET_NAME", "Contact Import")
 COMPANY_SHEET_NAME = os.environ.get("COMPANY_SHEET_NAME", "Company Import")
+# Rows routed to the Partnership pair are mirrored onto this tab, which is the
+# Partnerships team's working list. Set PARTNERSHIP_SHEET_NAME="" to disable.
+PARTNERSHIP_SHEET_NAME = os.environ.get("PARTNERSHIP_SHEET_NAME", "Agencies/Tech")
 POLL_INTERVAL_SECONDS = int(os.environ.get("POLL_INTERVAL_SECONDS", "300"))
 LEAD_SOURCE_VALUE = os.environ.get("LEAD_SOURCE_VALUE", "Event/Tradeshow")
 
